@@ -1,6 +1,7 @@
 // Turkey Runner — the DOM HUD and screens over the 3D canvas.
 // One job: show the numbers, run the real buttons, and swap the screens.
 import { POWERUP_DEFS } from './coins.js';
+import { ESCAPE_DISTANCE, FARMER_GAP_MIN, FARMER_GAP_MAX, THREAT_RED_BELOW } from './config.js';
 
 export class Hud {
   constructor(callbacks) {
@@ -28,12 +29,25 @@ export class Hud {
       endDist: document.getElementById('end-dist'),
       endCoins: document.getElementById('end-coins'),
       endMult: document.getElementById('end-mult'),
+      endNearmiss: document.getElementById('end-nearmiss'),
+      endBest: document.getElementById('end-best'),
       best: document.getElementById('best-line'),
       bestEnd: document.getElementById('best-line-end'),
       status: document.getElementById('status'),
+      stageName: document.getElementById('stage-name'),
+      stageFill: document.getElementById('stage-fill'),
+      goalLine: document.getElementById('goal-line'),
+      farmerLine: document.getElementById('farmer-line'),
+      threatFill: document.getElementById('threat-fill'),
+      farmerPill: document.getElementById('farmer-pill'),
+      shout: document.getElementById('shout'),
+      staminaFill: document.getElementById('stamina-fill'),
+      dashState: document.getElementById('dash-state'),
+      decoyLine: document.getElementById('decoy-line'),
     };
     this.toastTimer = null;
     this.bannerTimer = null;
+    this.bannerLockUntil = 0; // a moment banner cannot be overwritten until its last 0.2 s
     this.best = 0;
     try { this.best = Number(window.localStorage.getItem('turkey-run-best') || 0) || 0; } catch (e) { this.best = 0; }
     this._bind();
@@ -64,8 +78,22 @@ export class Hud {
   }
 
   showBest() {
-    if (this.el.best) this.el.best.textContent = `Best score: ${this.best.toLocaleString('en-US')}`;
-    if (this.el.bestEnd) this.el.bestEnd.textContent = `Best score: ${this.best.toLocaleString('en-US')}`;
+    // A fresh player has no best yet: show a dash, never a "0".
+    const label = this.best > 0 ? this.best.toLocaleString('en-US') : '—';
+    if (this.el.best) this.el.best.textContent = `Best score: ${label}`;
+    if (this.el.bestEnd) this.el.bestEnd.textContent = `Best score: ${label}`;
+  }
+
+  // Screenshot staging only: a staged scene must never show a zero best score.
+  // Raises the stored best to at least `min` (a plausible run total) and
+  // persists it, so title and end screens show a real number.
+  ensureStagedBest(min) {
+    if (this.best < min) {
+      this.best = min;
+      try { window.localStorage.setItem('turkey-run-best', String(this.best)); } catch (e) { /* ignore */ }
+      this.showBest();
+    }
+    return this.best;
   }
 
   saveBest(score) {
@@ -95,6 +123,8 @@ export class Hud {
     this.el.endDist.textContent = `${Math.floor(stats.distance)} m`;
     this.el.endCoins.textContent = String(stats.coins);
     this.el.endMult.textContent = `×${stats.multiplier}`;
+    if (this.el.endNearmiss) this.el.endNearmiss.textContent = String(stats.nearMiss || 0);
+    if (this.el.endBest) this.el.endBest.textContent = Math.floor(this.best).toLocaleString('en-US');
     this.showScreen('end');
   }
 
@@ -109,6 +139,59 @@ export class Hud {
       hearts += i < state.lives ? '&#10084;' : '<span class="lost">&#10084;</span>';
     }
     this.el.lives.innerHTML = hearts;
+    // Centre: stage + goal. The fill is overall progress to freedom (1500 m).
+    if (this.el.stageName) this.el.stageName.textContent = `STAGE ${state.stageIndex + 1} · ${state.stageName}`;
+    if (this.el.stageFill) this.el.stageFill.style.width = `${Math.min(100, (state.distance / ESCAPE_DISTANCE) * 100)}%`;
+    if (this.el.goalLine) this.el.goalLine.textContent = `${Math.floor(state.distance)} / ${ESCAPE_DISTANCE} m TO FREEDOM`;
+    // Right: the farmer threat panel.
+    if (this.el.farmerLine) this.el.farmerLine.textContent = `FARMER ${state.farmerName} ${state.farmerGap.toFixed(1)} m`;
+    const threat = 1 - (state.farmerGap - FARMER_GAP_MIN) / (FARMER_GAP_MAX - FARMER_GAP_MIN);
+    if (this.el.threatFill) {
+      this.el.threatFill.style.width = `${Math.max(4, Math.min(100, threat * 100))}%`;
+      this.el.threatFill.classList.toggle('hot', state.farmerGap < THREAT_RED_BELOW);
+    }
+    if (this.el.farmerPill) {
+      const pill = this.el.farmerPill;
+      if (state.farmerState === 'SEARCH') {
+        pill.textContent = 'SEARCHING...';
+        pill.className = 'search';
+        pill.id = 'farmer-pill';
+      } else if (state.farmerState === 'CORNER') {
+        pill.textContent = 'CUT OFF!';
+        pill.className = 'danger';
+        pill.id = 'farmer-pill';
+      } else if (state.farmerState === 'LUNGE') {
+        pill.textContent = "HE'S GRABBING!";
+        pill.className = 'danger';
+        pill.id = 'farmer-pill';
+      } else if (state.farmerGap < THREAT_RED_BELOW) {
+        pill.textContent = 'SPOTTED!';
+        pill.className = 'danger';
+        pill.id = 'farmer-pill';
+      } else {
+        pill.textContent = 'CLOSING IN!';
+        pill.className = '';
+        pill.id = 'farmer-pill';
+      }
+    }
+    // Farmer shout (game rotates the lines; empty string hides it).
+    if (this.el.shout) {
+      if (state.shout) {
+        if (this.el.shout.textContent !== state.shout) this.el.shout.textContent = state.shout;
+        this.el.shout.classList.add('show');
+      } else {
+        this.el.shout.classList.remove('show');
+      }
+    }
+    // Bottom-left: stamina + decoy stock.
+    if (this.el.staminaFill) {
+      this.el.staminaFill.style.width = `${Math.max(0, Math.min(100, state.stamina * 100))}%`;
+      this.el.staminaFill.classList.toggle('ready', state.dashReady);
+    }
+    if (this.el.dashState) {
+      this.el.dashState.textContent = state.dashReady ? 'DASH READY' : (state.stamina < 0.42 ? 'LOW STAMINA' : 'DASH...');
+    }
+    if (this.el.decoyLine) this.el.decoyLine.innerHTML = `&#129704; DECOY &times;${state.decoys}`;
     // Missions.
     this.el.missions.innerHTML = state.missions.map((m) => {
       const cls = m.done ? 'mission done' : 'mission';
@@ -127,16 +210,41 @@ export class Hud {
     }
   }
 
-  showBanner(name, sub) {
-    this.el.banner.innerHTML = `${name}<small>${sub || ''}</small>`;
-    this.el.banner.classList.add('show');
+  // One moment-banner state + anti-overwrite lock: a new banner may not
+  // replace a moment banner until its last 0.2 s, so a big moment is never
+  // covered by a small notification. kind: 'moment' (yellow) | 'danger'
+  // (red) | 'hide' (blue). seconds: how long it stays up.
+  showBanner(name, sub, kind = 'moment', seconds = 1.6) {
+    const now = performance.now();
+    if (now < this.bannerLockUntil - 200) return; // locked: moment still live
+    const banner = this.el.banner;
+    banner.innerHTML = `${name}<small>${sub || ''}</small>`;
+    banner.classList.remove('danger', 'hide');
+    if (kind === 'danger') banner.classList.add('danger');
+    else if (kind === 'hide') banner.classList.add('hide');
+    banner.classList.add('show');
     clearTimeout(this.bannerTimer);
-    this.bannerTimer = setTimeout(() => this.el.banner.classList.remove('show'), 1900);
+    this.bannerLockUntil = now + seconds * 1000;
+    this.bannerTimer = setTimeout(() => {
+      banner.classList.remove('show');
+      this.bannerLockUntil = 0;
+    }, seconds * 1000);
+  }
+
+  // Short-hand for a scored moment: "THAT WAS CLOSE! +120".
+  showMoment(text, kind = 'moment', seconds = 1.2) {
+    this.showBanner(text, '', kind, seconds);
   }
 
   hideBanner() {
     clearTimeout(this.bannerTimer);
+    this.bannerLockUntil = 0;
     this.el.banner.classList.remove('show');
+  }
+
+  hideToast() {
+    clearTimeout(this.toastTimer);
+    this.el.toast.classList.remove('show');
   }
 
   showToast(text) {

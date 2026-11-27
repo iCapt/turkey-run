@@ -125,6 +125,17 @@ export class Turkey {
       this.wingR.rotation.z = -0.25 - c * 0.12;
       this.tail.rotation.x = -0.12 + s * 0.05;
       this.head.position.y = 1.42 + Math.abs(c) * 0.03;
+    } else if (pose === 'dash') {
+      // Feather dash: wings thrown wide, body low and forward, tail streaming.
+      this.group.rotation.x = -0.22;
+      this.group.scale.set(1, 1, 1);
+      this.group.position.y = 0.12;
+      this.legL.rotation.x = 1.2;
+      this.legR.rotation.x = -1.2;
+      this.wingL.rotation.z = 1.5;
+      this.wingR.rotation.z = -1.5;
+      this.tail.rotation.x = -0.55;
+      this.head.position.y = 1.38;
     } else if (pose === 'jump') {
       this.group.rotation.x = -0.12;
       this.group.scale.set(1, 1, 1);

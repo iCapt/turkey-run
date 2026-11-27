@@ -110,19 +110,45 @@ export class Farmer {
   }
 
   // gapNorm: 0 = right on the turkey's tail, 1 = far behind and small.
-  update(dt, speedNorm, gapNorm) {
-    this.runPhase += dt * (8 + speedNorm * 10);
+  // state: CHASE | SEARCH | CORNER | LUNGE — each reads differently.
+  update(dt, speedNorm, gapNorm, state = 'CHASE') {
+    const rate = state === 'SEARCH' ? 0.35 : state === 'LUNGE' ? 1.5 : 1;
+    this.runPhase += dt * (8 + speedNorm * 10) * rate;
     const p = this.runPhase;
     const s = Math.sin(p);
     this.group.position.y = Math.abs(s) * 0.1;
-    this.group.rotation.x = 0.14;
-    this.legL.rotation.x = s * 1.0;
-    this.legR.rotation.x = -s * 1.0;
-    this.armL.rotation.x = -s * 0.8;
-    this.armR.rotation.x = s * 0.5 - 0.5;
-    this.pitchfork.rotation.x = -0.3 + s * 0.12;
-    this.pitchfork.rotation.z = -0.25 - gapNorm * 0.15;
-    // The closer he gets, the more he leans in.
-    this.group.rotation.x = 0.14 + (1 - gapNorm) * 0.12;
+    if (state === 'SEARCH') {
+      // Slowing, sweeping his gaze lane to lane, pitchfork lowered.
+      this.group.rotation.y = Math.sin(p * 0.45) * 0.7;
+      this.group.rotation.x = 0.05;
+      this.legL.rotation.x = s * 0.35;
+      this.legR.rotation.x = -s * 0.35;
+      this.armL.rotation.x = -s * 0.3;
+      this.armR.rotation.x = 0.2;
+      this.pitchfork.rotation.x = 0.35 + s * 0.06;
+      this.pitchfork.rotation.z = -0.1;
+    } else if (state === 'LUNGE') {
+      // Telegraph: crouched, pitchfork thrust forward at the turkey.
+      this.group.rotation.y = 0;
+      this.group.rotation.x = 0.42;
+      this.group.position.y = -0.12;
+      this.legL.rotation.x = 0.9;
+      this.legR.rotation.x = -0.7;
+      this.armL.rotation.x = -1.1;
+      this.armR.rotation.x = -1.3;
+      this.pitchfork.rotation.x = -1.15;
+      this.pitchfork.rotation.z = -0.05;
+    } else {
+      // CHASE / CORNER: full run; CORNER leans in harder.
+      const lean = state === 'CORNER' ? 0.1 : 0;
+      this.group.rotation.y = 0;
+      this.group.rotation.x = 0.14 + (1 - gapNorm) * 0.12 + lean;
+      this.legL.rotation.x = s * 1.0;
+      this.legR.rotation.x = -s * 1.0;
+      this.armL.rotation.x = -s * 0.8;
+      this.armR.rotation.x = s * 0.5 - 0.5;
+      this.pitchfork.rotation.x = -0.3 + s * 0.12;
+      this.pitchfork.rotation.z = -0.25 - gapNorm * 0.15;
+    }
   }
 }

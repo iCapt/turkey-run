@@ -4,7 +4,7 @@
 export class Input {
   constructor(app, callbacks) {
     this.app = app;
-    this.cb = callbacks; // { onLane(dir), onJump(), onRoll(), onPause(), onMute() }
+    this.cb = callbacks; // { onLane(dir), onJump(), onRoll(), onDash(), onDecoy(), onPause(), onMute() }
     this.dragStart = null;
     this.dragFired = null;
     this.cursor = document.getElementById('cursor');
@@ -20,6 +20,8 @@ export class Input {
       else if (key === 'ArrowRight' || key === 'd' || key === 'D') { this.cb.onLane(1); event.preventDefault(); }
       else if (key === 'ArrowUp' || key === 'w' || key === 'W' || key === ' ') { this.cb.onJump(); event.preventDefault(); }
       else if (key === 'ArrowDown' || key === 's' || key === 'S') { this.cb.onRoll(); event.preventDefault(); }
+      else if (key === 'Shift') { if (this.cb.onDash) this.cb.onDash(); event.preventDefault(); }
+      else if (key === 'q' || key === 'Q') { if (this.cb.onDecoy) this.cb.onDecoy(); }
       else if (key === 'p' || key === 'P' || key === 'Escape') { this.cb.onPause(); }
       else if (key === 'm' || key === 'M') { this.cb.onMute(); }
       else if (key === 'Enter') { this.cb.onConfirm(); }

@@ -32,6 +32,7 @@
     --red: #d23b2e;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  body.shot, body.shot * { animation: none !important; }
   html, body { height: 100%; overflow: hidden; background: #2b1a0e; }
   body { font-family: "Fredoka", "Trebuchet MS", "Segoe UI", Verdana, sans-serif; color: var(--cream); }
   #app { position: fixed; inset: 0; width: 100%; height: 100%; overflow: hidden; touch-action: none; cursor: none; }
@@ -61,39 +62,65 @@
   .hud-btn:hover, .hud-btn.hot { background: linear-gradient(#ffe680, #ffc93c); transform: translateY(-1px); }
   .hud-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--brown); }
   #hud-topleft { position: absolute; top: 12px; left: 12px; display: flex; gap: 10px; }
-  #score-wrap { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 0 rgba(0,0,0,.45), 0 0 12px rgba(0,0,0,.35); }
-  #score-label { font-size: 12px; letter-spacing: 4px; font-weight: 900; color: #ffe9a8; }
-  #score { font-family: "Luckiest Guy", "Fredoka", sans-serif; font-size: clamp(30px, 5vw, 44px); letter-spacing: 1px; line-height: 1; color: #fff; }
-  #dist-line { font-size: 14px; font-weight: 700; color: #ffe9a8; margin-top: 2px; }
+  .hud-panel { background: rgba(43,26,14,.72); border: 2px solid rgba(255,217,77,.85); border-radius: 14px; padding: 8px 12px; box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+  #hud-left { position: absolute; top: 12px; left: 128px; text-align: left; text-shadow: 0 2px 0 rgba(0,0,0,.45); }
+  #score-label { font-size: 11px; letter-spacing: 4px; font-weight: 900; color: #ffe9a8; }
+  #score { font-family: "Luckiest Guy", "Fredoka", sans-serif; font-size: clamp(28px, 4.5vw, 40px); letter-spacing: 1px; line-height: 1; color: #fff; }
+  #dist-line { font-size: 13px; font-weight: 700; color: #ffe9a8; margin-top: 2px; }
   #mult { display: inline-block; margin-top: 4px; padding: 2px 12px; border-radius: 999px; background: var(--orange); border: 2px solid var(--cream); font-weight: 900; font-size: 15px; }
   #mult.hot { background: var(--red); animation: pulse .5s infinite alternate; }
   @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.12); } }
-  #hud-topright { position: absolute; top: 12px; right: 12px; text-align: right; text-shadow: 0 2px 0 rgba(0,0,0,.45); }
-  #coins { font-size: clamp(20px, 3vw, 28px); font-weight: 900; }
-  #lives { font-size: clamp(20px, 3vw, 28px); letter-spacing: 2px; color: #ff6b5e; margin-top: 2px; }
+  #hud-center { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); text-align: center; width: min(38vw, 430px); }
+  #stage-name { font-family: "Luckiest Guy", "Fredoka", sans-serif; font-size: clamp(15px, 2.2vw, 21px); letter-spacing: 2px; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
+  #stage-bar { position: relative; display: flex; height: 22px; margin-top: 5px; border-radius: 99px; overflow: hidden; border: 2px solid var(--cream); background: rgba(0,0,0,.45); }
+  #stage-bar .seg { flex: 1; position: relative; z-index: 1; font-size: 9.5px; font-weight: 900; letter-spacing: 1px; color: rgba(255,243,214,.85); line-height: 18px; border-right: 1px solid rgba(255,243,214,.6); }
+  #stage-bar .seg:last-child { border-right: none; }
+  #stage-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: linear-gradient(90deg, #f2b705, #e8722a, #4a7c2f); z-index: 0; }
+  #goal-line { font-size: 13px; font-weight: 900; letter-spacing: 1px; color: #ffe9a8; margin-top: 5px; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
+  #hud-right { position: absolute; top: 12px; right: 12px; text-align: right; }
+  #coins { font-size: clamp(18px, 2.6vw, 25px); font-weight: 900; text-shadow: 0 2px 0 rgba(0,0,0,.45); }
+  #lives { font-size: clamp(18px, 2.6vw, 25px); letter-spacing: 2px; color: #ff6b5e; margin-top: 1px; text-shadow: 0 2px 0 rgba(0,0,0,.45); }
   #lives .lost { color: rgba(255,255,255,.28); }
-  #powerup { position: absolute; top: 96px; right: 12px; width: 74px; text-align: center; display: none; }
+  #farmer-line { font-size: clamp(13px, 1.8vw, 17px); font-weight: 900; letter-spacing: 1px; color: #fff; margin-top: 4px; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
+  #threat-bar { height: 10px; margin-top: 4px; border-radius: 99px; background: rgba(0,0,0,.5); border: 1px solid var(--cream); overflow: hidden; }
+  #threat-fill { height: 100%; width: 20%; background: var(--gold); }
+  #threat-fill.hot { background: var(--red); }
+  #farmer-pill { display: inline-block; margin-top: 5px; padding: 2px 10px; border-radius: 999px; background: var(--orange); border: 2px solid var(--cream); font-weight: 900; font-size: 12.5px; letter-spacing: 1px; }
+  #farmer-pill.danger { background: var(--red); animation: pulse .5s infinite alternate; }
+  #farmer-pill.search { background: #3a6ea8; }
+  #shout { position: absolute; top: 196px; right: 12px; max-width: 300px; text-align: right; font-family: "Luckiest Guy", "Fredoka", sans-serif; font-size: clamp(17px, 2.4vw, 26px); letter-spacing: 1px; color: #fff; text-shadow: 0 2px 0 #2b1a0e, 0 0 14px rgba(0,0,0,.6); opacity: 0; transition: opacity .3s; pointer-events: none; }
+  #shout.show { opacity: 1; }
+  #hud-bottomleft { position: absolute; left: 12px; bottom: 44px; }
+  #stamina-wrap { display: flex; align-items: center; gap: 8px; background: rgba(43,26,14,.72); border: 2px solid rgba(255,243,214,.65); border-radius: 999px; padding: 5px 12px; font-size: 11.5px; font-weight: 900; letter-spacing: 1px; }
+  #stamina-bar { width: 110px; height: 10px; border-radius: 99px; background: rgba(0,0,0,.5); border: 1px solid var(--cream); overflow: hidden; }
+  #stamina-fill { height: 100%; width: 100%; background: #7cc4ff; }
+  #stamina-fill.ready { background: #ffd94d; }
+  #dash-state { color: #ffe9a8; }
+  #decoy-line { display: inline-block; margin-top: 6px; background: rgba(43,26,14,.72); border: 2px solid rgba(255,243,214,.65); border-radius: 999px; padding: 4px 12px; font-size: 12.5px; font-weight: 900; letter-spacing: 1px; }
+  #control-bar { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); background: rgba(43,26,14,.72); border: 2px solid rgba(255,243,214,.65); border-radius: 999px; padding: 5px 16px; font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+  #control-bar b { color: #ffd94d; }
+  #powerup { position: absolute; top: 252px; right: 12px; width: 74px; text-align: center; display: none; }
   #powerup.on { display: block; }
   #powerup .pu-icon { font-size: 40px; line-height: 1; filter: drop-shadow(0 3px 3px rgba(0,0,0,.5)); }
   #powerup .pu-name { font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-top: 2px; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
   #powerup .pu-bar { height: 8px; margin-top: 4px; border-radius: 99px; background: rgba(0,0,0,.45); border: 1px solid var(--cream); overflow: hidden; }
   #powerup .pu-fill { height: 100%; background: var(--gold); width: 100%; }
-  #missions { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 8px; width: min(96vw, 640px); justify-content: center; }
+  #missions { position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); display: flex; gap: 8px; width: min(96vw, 640px); justify-content: center; }
   .mission { flex: 1; background: rgba(43,26,14,.72); border: 2px solid rgba(255,243,214,.65); border-radius: 12px; padding: 6px 8px; font-size: 12px; font-weight: 700; line-height: 1.25; }
   .mission.done { border-color: var(--gold); background: rgba(74,124,47,.85); }
   .mission .m-prog { display: block; font-size: 11px; color: #ffe9a8; }
   #stage-banner {
-    position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%) scale(.9);
+    position: absolute; left: 50%; top: 20%; transform: translate(-50%,-50%) scale(.9);
     font-family: "Luckiest Guy", "Fredoka", sans-serif;
-    font-size: clamp(30px, 6vw, 54px); letter-spacing: 3px; text-align: center;
-    background: linear-gradient(180deg, #fff3b0 0%, #ffd94d 40%, #f28a3c 75%, #e8722a 100%);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 3px 0 rgba(43,26,14,.85)) drop-shadow(0 6px 18px rgba(0,0,0,.6));
+    font-size: clamp(34px, 6.5vw, 62px); letter-spacing: 3px; text-align: center;
+    color: #ffd94d;
+    text-shadow: -2px -2px 0 #2b1a0e, 2px -2px 0 #2b1a0e, -2px 2px 0 #2b1a0e, 2px 2px 0 #2b1a0e, 0 4px 0 #2b1a0e, 0 8px 22px rgba(0,0,0,.65);
     opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
   }
+  #stage-banner.danger { color: #ff5a4a; }
+  #stage-banner.hide { color: #7cc4ff; }
   #stage-banner.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
-  #stage-banner small { display: block; font-size: clamp(13px, 2vw, 18px); letter-spacing: 3px; color: #ffe9a8; }
+  #stage-banner small { display: block; font-size: clamp(13px, 2vw, 18px); letter-spacing: 3px; color: #ffe9a8; text-shadow: -1px -1px 0 #2b1a0e, 1px -1px 0 #2b1a0e, -1px 1px 0 #2b1a0e, 1px 1px 0 #2b1a0e, 0 2px 0 #2b1a0e; }
   #toast {
     position: absolute; left: 50%; top: 22%; transform: translateX(-50%);
     background: rgba(43,26,14,.85); border: 2px solid var(--gold); border-radius: 999px;
@@ -104,6 +131,12 @@
 
   /* ---------- overlays ---------- */
   .overlay { position: absolute; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 38%, rgba(43,26,14,.42), rgba(43,26,14,.88)); }
+  #title-screen { align-items: flex-start; padding-top: 20px; background: linear-gradient(180deg, rgba(43,26,14,.55), rgba(43,26,14,.08) 45%, rgba(43,26,14,.28)); }
+  #title-screen .panel { width: min(94vw, 620px); padding: 12px 20px 14px; }
+  #title-screen .panel h1 { font-size: clamp(28px, 5.5vw, 42px); }
+  #title-screen .panel p { font-size: 13px; }
+  #end-screen { justify-content: flex-end; padding-right: 28px; background: linear-gradient(90deg, rgba(43,26,14,.08), rgba(43,26,14,.55) 70%); }
+  #end-screen .panel { width: min(88vw, 480px); }
   .overlay.on { display: flex; }
   .panel {
     width: min(92vw, 560px); max-height: 92vh; overflow-y: auto; text-align: center;
@@ -152,12 +185,23 @@
 
   @media (max-width: 640px) {
     .hud-btn { width: 44px; height: 44px; font-size: 19px; border-width: 2px; }
+    #hud-left { left: 108px; padding: 6px 9px; }
+    #hud-center { width: 44vw; top: 64px; }
+    #stage-bar .seg { font-size: 8px; }
+    #goal-line { font-size: 11px; }
+    #hud-right { padding: 6px 9px; }
+    #shout { top: 210px; max-width: 200px; }
     #score-label { font-size: 10px; }
     #dist-line { font-size: 12px; }
-    #powerup { top: 84px; width: 60px; }
+    #powerup { top: 230px; width: 60px; }
     #powerup .pu-icon { font-size: 32px; }
+    #control-bar { display: none; }
+    #hud-bottomleft { bottom: 40px; }
+    #stamina-bar { width: 70px; }
     .mission { font-size: 11px; }
     .controls-grid { grid-template-columns: 1fr; }
+    #title-screen { padding-top: 8px; }
+    #end-screen { padding-right: 8px; justify-content: center; }
   }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* Debug FPS meter: off by default, enabled with ?fps=1 in the URL. */
@@ -177,16 +221,30 @@
       <button class="hud-btn" id="btn-pause" title="Pause (P)" aria-label="Pause game">&#10074;&#10074;</button>
       <button class="hud-btn" id="btn-mute" title="Sound on/off (M)" aria-label="Toggle sound">&#128266;</button>
     </div>
-    <div id="score-wrap">
+    <div id="hud-left" class="hud-panel">
       <div id="score-label">SCORE</div>
       <div id="score">0</div>
       <div id="dist-line">0 m</div>
       <div id="mult">&times;1</div>
     </div>
-    <div id="hud-topright">
+    <div id="hud-center" class="hud-panel">
+      <div id="stage-name">STAGE 1 &middot; FARMYARD</div>
+      <div id="stage-bar"><div class="seg">FARMYARD</div><div class="seg">BARN</div><div class="seg">KITCHEN</div><div id="stage-fill"></div></div>
+      <div id="goal-line">0 / 1500 m TO FREEDOM</div>
+    </div>
+    <div id="hud-right" class="hud-panel">
       <div id="coins">&#127805; 0</div>
       <div id="lives">&#10084;&#10084;&#10084;</div>
+      <div id="farmer-line">FARMER OTIS 14.0 m</div>
+      <div id="threat-bar"><div id="threat-fill"></div></div>
+      <div id="farmer-pill">CLOSING IN!</div>
     </div>
+    <div id="shout"></div>
+    <div id="hud-bottomleft">
+      <div id="stamina-wrap"><span>STAMINA</span><div id="stamina-bar"><div id="stamina-fill"></div></div><span id="dash-state">DASH READY</span></div>
+      <div id="decoy-line">&#129704; DECOY &times;2</div>
+    </div>
+    <div id="control-bar"><b>&larr;/&rarr;</b> lane &middot; <b>SPACE</b> jump &middot; <b>&darr;</b> roll &middot; <b>SHIFT</b> dash &middot; <b>Q</b> decoy &middot; <b>P</b> pause</div>
     <div id="powerup">
       <div class="pu-icon" id="pu-icon">&#127806;</div>
       <div class="pu-name" id="pu-name">TRAY</div>
@@ -208,13 +266,15 @@
         <div><b>&larr; / &rarr;</b> or drag &mdash; switch lane</div>
         <div><b>&uarr; / Space</b> or swipe up &mdash; jump</div>
         <div><b>&darr;</b> or swipe down &mdash; roll under</div>
+        <div><b>Shift</b> &mdash; feather dash</div>
+        <div><b>Q</b> &mdash; toss a feather decoy</div>
         <div><b>P / Esc</b> &mdash; pause &nbsp; <b>M</b> &mdash; sound</div>
       </div>
       <p style="margin-top:8px">Grab <b>corn</b> for points, finish <b>missions</b> to raise your
       multiplier, and catch the <b>baking tray</b> mid-run for a hoverboard shield. Three hearts,
       one farmer, no second chances.</p>
       <button class="big-btn green" id="btn-start">START RUN &#9654;</button>
-      <div id="best-line">Best score: 0</div>
+      <div id="best-line">Best score: —</div>
       <p class="tiny">A tiny original Thanksgiving chase game. Turkey, farmer, farm and kitchen are all
       drawn from scratch &mdash; no borrowed characters, art or music.</p>
     </div>
@@ -241,11 +301,13 @@
         <div class="stat"><div class="v" id="end-dist">0 m</div><div class="k">DISTANCE</div></div>
         <div class="stat"><div class="v" id="end-coins">0</div><div class="k">CORN</div></div>
         <div class="stat"><div class="v" id="end-mult">&times;1</div><div class="k">MULTIPLIER</div></div>
+        <div class="stat"><div class="v" id="end-nearmiss">0</div><div class="k">DODGES</div></div>
+        <div class="stat"><div class="v" id="end-best">0</div><div class="k">BEST</div></div>
       </div>
       <div class="btn-row">
         <button class="big-btn green" id="btn-restart">RUN AGAIN &#9654;</button>
       </div>
-      <div id="best-line-end">Best score: 0</div>
+      <div id="best-line-end">Best score: —</div>
     </div>
   </div>
 

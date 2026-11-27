@@ -1,15 +1,31 @@
 // Turkey Runner — the world the turkey runs through: track, rails, sky and scenery.
 // One job: the ground under the run and the stage dressing that scrolls past.
 import * as THREE from 'three';
-import { STAGES, LANES } from './config.js';
+import { STAGES, LANES, mulberry32 } from './config.js';
 
-function groundTexture(baseColor, speckleColor, tile) {
+function groundTexture(baseColor, speckleColor, opts = {}) {
+  const { tile = false, checker = null, random = Math.random, repeatX = 6, repeatY = 24 } = opts;
   const c = document.createElement('canvas');
   c.width = 256; c.height = 256;
   const g = c.getContext('2d');
   g.fillStyle = baseColor;
   g.fillRect(0, 0, 256, 256);
-  if (tile) {
+  if (checker) {
+    // Kitchen floor: cream vs terracotta-red checkerboard (4x4 per tile).
+    for (let x = 0; x < 4; x += 1) {
+      for (let y = 0; y < 4; y += 1) {
+        if ((x + y) % 2 === 0) continue;
+        g.fillStyle = checker;
+        g.fillRect(x * 64, y * 64, 64, 64);
+      }
+    }
+    g.strokeStyle = 'rgba(0,0,0,0.18)';
+    g.lineWidth = 3;
+    for (let i = 0; i <= 4; i += 1) {
+      g.beginPath(); g.moveTo(i * 64, 0); g.lineTo(i * 64, 256); g.stroke();
+      g.beginPath(); g.moveTo(0, i * 64); g.lineTo(256, i * 64); g.stroke();
+    }
+  } else if (tile) {
     g.strokeStyle = 'rgba(0,0,0,0.25)';
     g.lineWidth = 4;
     for (let i = 0; i <= 4; i += 1) {
@@ -20,14 +36,32 @@ function groundTexture(baseColor, speckleColor, tile) {
   // Speckles so the ground is not a flat sheet.
   for (let i = 0; i < 420; i += 1) {
     g.fillStyle = speckleColor;
-    g.globalAlpha = 0.05 + Math.random() * 0.07;
-    const r = 1 + Math.random() * 2.5;
-    g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, r, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 0.05 + random() * 0.07;
+    const r = 1 + random() * 2.5;
+    g.beginPath(); g.arc(random() * 256, random() * 256, r, 0, Math.PI * 2); g.fill();
   }
   g.globalAlpha = 1;
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(6, 24);
+  tex.repeat.set(repeatX, repeatY);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// A 4-band vertical sky gradient (top -> horizon) painted on a tiny canvas,
+// so the sky is never one flat fog colour. One texture per stage, cached.
+function skyTexture(bands) {
+  const c = document.createElement('canvas');
+  c.width = 4; c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, bands[0]);
+  grad.addColorStop(0.45, bands[1]);
+  grad.addColorStop(0.75, bands[2]);
+  grad.addColorStop(1, bands[3]);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 4, 256);
+  const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
@@ -45,6 +79,9 @@ const MAT = {
   counter: new THREE.MeshStandardMaterial({ color: 0x8a6b4a, roughness: 0.8 }),
   pot: new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.4, metalness: 0.6 }),
   pumpkin: new THREE.MeshStandardMaterial({ color: 0xe8722a, roughness: 0.7 }),
+  creamWall: new THREE.MeshStandardMaterial({ color: 0xf2e3c2, roughness: 0.95 }),
+  cabinetRed: new THREE.MeshStandardMaterial({ color: 0xb3271e, roughness: 0.7 }),
+  tray: new THREE.MeshStandardMaterial({ color: 0xc8a24a, roughness: 0.4, metalness: 0.5 }),
 };
 const GEO = {
   trunk: new THREE.CylinderGeometry(0.22, 0.3, 1.6, 8),
@@ -58,6 +95,13 @@ const GEO = {
   pot: new THREE.CylinderGeometry(0.35, 0.3, 0.5, 12),
   pumpkin: new THREE.SphereGeometry(0.55, 12, 10),
   stem: new THREE.CylinderGeometry(0.07, 0.09, 0.35, 6),
+  kitchenWall: new THREE.BoxGeometry(4.4, 4.4, 0.3),
+  kitchenSideWall: new THREE.BoxGeometry(0.3, 6.5, 80),
+  kitchenTrim: new THREE.BoxGeometry(0.08, 0.3, 80),
+  kitchenDoor: new THREE.BoxGeometry(1.2, 2.6, 0.1),
+  cabinet: new THREE.BoxGeometry(2.4, 2.0, 1.0),
+  cabinetDoor: new THREE.BoxGeometry(1.0, 1.6, 0.08),
+  tray: new THREE.CylinderGeometry(0.55, 0.45, 0.18, 14),
 };
 
 export class Track {
@@ -68,10 +112,52 @@ export class Track {
     this.scenery = [];
     this.spawnClock = 0;
     this.random = Math.random;
+    this.skyRandom = mulberry32(20261127); // fixed seed: same clouds every load
+    this.skyTextures = {};
     this._buildLights();
     this._buildGround();
     this._buildRails();
     this._buildSky();
+    this._buildKitchenRoom();
+  }
+
+  // Permanent kitchen interior: cream side walls + red doors + cabinet runs
+  // flanking the track, so the kitchen reads as a room, not an open field.
+  // Built once, visible only in the kitchen stage (toggled in setStage) —
+  // the farmyard and barn never see it.
+  _buildKitchenRoom() {
+    this.kitchenRoom = new THREE.Group();
+    for (const side of [-1, 1]) {
+      const wall = new THREE.Mesh(GEO.kitchenSideWall, MAT.creamWall);
+      wall.position.set(side * 6.4, 3.25, 26);
+      wall.castShadow = true; wall.receiveShadow = true;
+      this.kitchenRoom.add(wall);
+      // Red border stripe along the inner face, near the top.
+      const trim = new THREE.Mesh(GEO.kitchenTrim, MAT.cabinetRed);
+      trim.position.set(side * (6.4 - 0.19), 5.6, 26);
+      this.kitchenRoom.add(trim);
+      // Red doors set into the wall, staggered per side.
+      const doorZs = side < 0 ? [8, 28] : [18, 38];
+      for (const z of doorZs) {
+        const door = new THREE.Mesh(GEO.kitchenDoor, MAT.cabinetRed);
+        door.position.set(side * (6.4 - 0.2), 1.3, z);
+        door.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+        this.kitchenRoom.add(door);
+        const knob = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), MAT.tray);
+        knob.position.set(side * (6.4 - 0.32), 1.3, z + (side < 0 ? -0.4 : 0.4));
+        this.kitchenRoom.add(knob);
+      }
+      // Cabinet run: cream cabinets with red doors facing the track,
+      // trays and pots on top (reuses the kitchen scenery cabinet).
+      for (const z of [4, 14, 24, 34]) {
+        const cab = this._makeSceneryProp('cabinet');
+        cab.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+        cab.position.set(side * 5.2, 0, z);
+        this.kitchenRoom.add(cab);
+      }
+    }
+    this.kitchenRoom.visible = false;
+    this.scene.add(this.kitchenRoom);
   }
 
   _buildSky() {
@@ -84,12 +170,13 @@ export class Track {
     for (const [x, y, z] of cloudSpots) {
       const puff = new THREE.Group();
       for (let i = 0; i < 3; i += 1) {
-        const s = new THREE.Mesh(new THREE.SphereGeometry(2.2 + Math.random() * 1.6, 10, 8), cloudMat);
+        const s = new THREE.Mesh(new THREE.SphereGeometry(2.2 + this.skyRandom() * 1.6, 10, 8), cloudMat);
         s.scale.y = 0.45;
-        s.position.set(i * 2.6 - 2.6, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 1.2);
+        s.position.set(i * 2.6 - 2.6, (this.skyRandom() - 0.5) * 0.6, (this.skyRandom() - 0.5) * 1.2);
         puff.add(s);
       }
       puff.position.set(x, y, z);
+      puff.userData.baseX = x;
       this.clouds.add(puff);
     }
     this.scene.add(this.clouds);
@@ -205,13 +292,33 @@ export class Track {
     this.stageIndex = index;
     this.random = random || Math.random;
     const st = STAGES[index];
-    this.scene.background = new THREE.Color(st.sky);
+    if (!this.skyTextures[index]) this.skyTextures[index] = skyTexture(st.skyBands);
+    this.scene.background = this.skyTextures[index];
     this.scene.fog = new THREE.Fog(st.fog, 26, 95);
-    this.groundMat.map = groundTexture(`#${st.ground.toString(16).padStart(6, '0')}`, '#000000', index === 2);
+    const groundHex = `#${st.ground.toString(16).padStart(6, '0')}`;
+    const trackHex = `#${st.track.toString(16).padStart(6, '0')}`;
+    if (st.floorCheck) {
+      // Kitchen: cream/terracotta checkerboard on the ground AND the track bed.
+      this.groundMat.map = groundTexture(groundHex, '#000000', { checker: trackHex, random: this.random, repeatX: 10, repeatY: 40 });
+      this.bedMat.map = groundTexture(groundHex, '#ffffff', { checker: trackHex, random: this.random, repeatX: 3, repeatY: 24 });
+    } else {
+      this.groundMat.map = groundTexture(groundHex, '#000000', { random: this.random });
+      this.bedMat.map = groundTexture(trackHex, '#ffffff', { random: this.random });
+    }
     this.groundMat.needsUpdate = true;
-    this.bedMat.map = groundTexture(`#${st.track.toString(16).padStart(6, '0')}`, '#ffffff', false);
     this.bedMat.needsUpdate = true;
+    // Kitchen is indoors: the room walls/cabinets show, and the outdoor
+    // dressing (clouds, hills, fence) hides. Farmyard/barn keep it all.
+    const kitchen = index === 2;
+    this.kitchenRoom.visible = kitchen;
+    this.clouds.visible = !kitchen;
+    this.hills.visible = !kitchen;
+    this.fence.visible = !kitchen;
     this.ovenGlow.intensity = index === 2 ? 60 : 0;
+    // Per-stage light: barn dimmer and redder, kitchen bright and pale.
+    if (index === 1) { this.hemi.intensity = 0.8; this.hemi.color.set(0xffd9b0); this.sun.intensity = 1.3; this.sun.color.set(0xffb070); }
+    else if (index === 2) { this.hemi.intensity = 1.15; this.hemi.color.set(0xfff6e0); this.sun.intensity = 1.7; this.sun.color.set(0xfff0c0); }
+    else { this.hemi.intensity = 0.95; this.hemi.color.set(0xfff2cc); this.sun.intensity = 1.6; this.sun.color.set(0xffe0a0); }
     // Clear old scenery; fresh dressing spawns as the run continues.
     for (const item of this.scenery) this.scene.remove(item.mesh);
     this.scenery = [];
@@ -221,10 +328,30 @@ export class Track {
   _makeSceneryProp(kind) {
     const g = new THREE.Group();
     const { wood, leaf, leaf2, hay, red } = MAT;
-    if (kind === 'tree') {
+    if (kind === 'kitchenwall') {
+      // Kitchen wall: pale cream with a red door, so the kitchen reads as a room.
+      const wall = new THREE.Mesh(GEO.kitchenWall, MAT.creamWall);
+      wall.position.y = 2.2; wall.castShadow = true; g.add(wall);
+      const door = new THREE.Mesh(GEO.kitchenDoor, MAT.cabinetRed);
+      door.position.set(0.6, 1.3, 0.18); g.add(door);
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), MAT.tray);
+      knob.position.set(0.15, 1.3, 0.26); g.add(knob);
+    } else if (kind === 'cabinet') {
+      // Cream cabinet with red doors + a pie tray on top.
+      const cab = new THREE.Mesh(GEO.cabinet, MAT.creamWall);
+      cab.position.y = 1.0; cab.castShadow = true; g.add(cab);
+      for (const dx of [-0.55, 0.55]) {
+        const door = new THREE.Mesh(GEO.cabinetDoor, MAT.cabinetRed);
+        door.position.set(dx, 1.0, 0.52); g.add(door);
+      }
+      const tray = new THREE.Mesh(GEO.tray, MAT.tray);
+      tray.position.set(0.4, 2.1, 0); tray.castShadow = true; g.add(tray);
+      const pot = new THREE.Mesh(GEO.pot, MAT.pot);
+      pot.position.set(-0.6, 2.25, 0); g.add(pot);
+    } else if (kind === 'tree') {
       const trunk = new THREE.Mesh(GEO.trunk, wood);
       trunk.position.y = 0.8; trunk.castShadow = true; g.add(trunk);
-      const crown = new THREE.Mesh(GEO.crown, Math.random() < 0.5 ? leaf : leaf2);
+      const crown = new THREE.Mesh(GEO.crown, this.random() < 0.5 ? leaf : leaf2);
       crown.position.y = 3.0; crown.castShadow = true; g.add(crown);
     } else if (kind === 'haystack') {
       const bale = new THREE.Mesh(GEO.bale, hay);
@@ -259,7 +386,7 @@ export class Track {
     const stage = this.stageIndex;
     const kinds = stage === 0 ? ['tree', 'haystack', 'fencepost', 'pumpkin']
       : stage === 1 ? ['barnwall', 'haystack', 'fencepost', 'pumpkin']
-      : ['counter', 'barnwall', 'pumpkin'];
+      : ['counter', 'cabinet', 'kitchenwall', 'pumpkin'];
     const side = random() < 0.5 ? -1 : 1;
     const kind = kinds[Math.floor(random() * kinds.length)];
     const mesh = this._makeSceneryProp(kind);
@@ -295,6 +422,9 @@ export class Track {
   reset(random) {
     for (const item of this.scenery) this.scene.remove(item.mesh);
     this.scenery = [];
+    // Clouds drift during the title idle before staging; put them home so a
+    // seeded run always starts from the same sky.
+    for (const cloud of this.clouds.children) cloud.position.x = cloud.userData.baseX;
     this.spawnClock = 0;
     this.sleeperOffset = 0;
     this._layoutSleepers(0);

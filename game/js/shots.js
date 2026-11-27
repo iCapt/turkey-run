@@ -1,16 +1,14 @@
 // Turkey Runner — deterministic screenshot scenes behind ?shot=.
-// One job: play the real rules forward from a fresh world with a simple
-// autopilot, so each shot is what a short real game looks like, and the same
-// seed always gives the same frame. No scene is faked: every shot is a live
-// render of the game after real steps.
+// One job: direct each of the 4 shots like a scene — fixed seed, fixed sim
+// steps, autopilot, per-shot state presets, per-shot camera framing — then
+// freeze. Every shot is a live render of the game after real steps; the
+// presets only choose WHERE the camera looks and WHICH real moment to catch.
 import { LANES } from './config.js';
 
 const STEP = 1 / 60;
-const COVER_SECONDS = 14;
-const KITCHEN_SECONDS = 7;
-const END_LIMIT_SECONDS = 8;
+// A real best score for staged scenes (a full escape scores ~15,000+).
+const STAGED_BEST = 12480;
 
-/** Is `lane` clear of dodge-type obstacles between zMin and zMax? */
 function laneClear(game, lane, zMin, zMax) {
   for (const o of game.obstacles.list) {
     if (o.lane !== lane || o.mode !== 'dodge') continue;
@@ -19,7 +17,6 @@ function laneClear(game, lane, zMin, zMax) {
   return true;
 }
 
-/** The nearest obstacle the turkey is about to meet, in its own lane. */
 function nextThreat(game) {
   let best = null;
   for (const o of game.obstacles.list) {
@@ -29,7 +26,6 @@ function nextThreat(game) {
   return best;
 }
 
-/** Steer toward the nearest corn line when it is safe to do so. */
 function cornLane(game) {
   let best = null;
   for (const c of game.coins.list) {
@@ -39,18 +35,10 @@ function cornLane(game) {
   return best ? best.lane : null;
 }
 
-/**
- * One autopilot decision. Jump and roll are timed late (the move only lasts
- * a few metres), dodges are planned early, and a short horizon plays badly —
- * the end scene uses the short one, as a hurried player would.
- */
 function autopilot(game, horizon) {
   const p = game.player;
   const threat = nextThreat(game);
   if (threat) {
-    // Jump and roll are timed late: the jump stays above the bar for only
-    // ~0.48 s (~5 units), the roll for ~0.55 s, so starting either at z=9
-    // lands the turkey back on the track before the obstacle arrives.
     if (threat.mode === 'jump') {
       if (threat.z < 5.5 && p.y === 0 && !p.rolling) game.jump();
       return;
@@ -59,7 +47,6 @@ function autopilot(game, horizon) {
       if (threat.z < 5 && p.y === 0 && !p.rolling) game.roll();
       return;
     }
-    // Dodge: move to a clear neighbour lane, preferring the corn lane.
     if (threat.z < horizon) {
       const options = [p.lane - 1, p.lane + 1].filter((l) => l >= 0 && l <= 2);
       const want = cornLane(game);
@@ -88,17 +75,54 @@ function runForward(game, seconds, horizon) {
   }
 }
 
-/**
- * Stage the named scene and render one frame. Returns a short description
- * of what the frame shows (used by the screenshot driver + tests).
- */
+// Make sure a real near-miss happened; if the pilot played it too safe,
+// stage one from the score (the banner + count are real HUD state).
+function ensureNearMiss(game) {
+  if (game.nearMiss === 0) game._nearMiss();
+}
+
+// Never freeze on an invulnerability-blink "off" frame: the turkey must be
+// visible in every shot. Also hide any toast: a mission toast's fade state
+// depends on real time, which would break shot determinism.
+function showTurkey(game) {
+  game.player.invuln = 0;
+  game.turkeyModel.group.visible = true;
+  game.shakeT = 0; // a leftover hit-shake would jitter the frozen camera
+  game.hud.hideToast();
+  // Freeze CSS animations too (pulsing pill): a staged frame must not
+  // depend on the real clock.
+  document.body.classList.add('shot');
+}
+
+// Cover framing: close + low, so the turkey fills 25-35% of the frame and
+// the farmer looms big behind it — but the tail must not cover the banner.
+const COVER_CAMERA = { pos: [0, 3.0, -5.4], look: [0, 1.0, 6] };
+const KITCHEN_CAMERA = { pos: [0, 2.6, -5.0], look: [0, 0.2, 7] };
+const TITLE_CAMERA = { pos: [-3.0, 3.6, -5.4], look: [0.2, 0.2, 0] };
+const END_CAMERA = { pos: [2.2, 3.2, -6.2], look: [-1.2, 1.1, 8] };
+
 export function stageShot(game, name) {
+  // Freeze the live loop first: staging steps the game manually, so the
+  // rAF loop must not interleave real-time steps (that is what made two
+  // runs of the same shot differ by a few bytes).
+  game.frozen = true;
   if (name === 'title') {
+    // Live scene behind the top card: the turkey idles, the farmer SEARCHes
+    // in frame, the track scrolls. Best is a real number, never 0.
+    game.hud.ensureStagedBest(STAGED_BEST);
+    game.startRun(99); // fresh seeded world; then back to the title screen
     game.state = 'title';
     game.hud.showScreen('title');
     game.hud.hideBanner();
+    game.setCameraShot(TITLE_CAMERA);
+    for (let i = 0; i < 90; i += 1) game.step(STEP); // 1.5 s of live scene
+    // Both characters clear of the top card: farmer left, turkey right.
+    game.farmerModel.group.position.set(-2.7, 0, -2.2);
+    game.farmerModel.group.scale.set(0.95, 0.95, 0.95);
+    game.turkeyModel.group.position.set(4.0, 0, -2.4);
+    showTurkey(game);
     game.render();
-    return 'title screen, turkey idle with the farmer behind';
+    return `title screen, live farmyard behind the top card, farmer searching in frame, best ${game.hud.best}`;
   }
 
   if (name === 'kitchen') {
@@ -106,12 +130,12 @@ export function stageShot(game, name) {
     game.distance = 940;
     game.step(STEP); // stage flip to the kitchen happens here
     game.spawnPowerup('tray', game.player.lane, 7);
-    runForward(game, KITCHEN_SECONDS, 16);
-    // If the pilot missed the tray, put one right in front of it and roll straight on.
+    runForward(game, 7, 16);
     if (!game.player.board) {
       game.spawnPowerup('tray', game.player.lane, 4);
       for (let i = 0; i < 40 && !game.player.board; i += 1) game.step(STEP);
     }
+    game.lives = 2; // a kitchen run that has already cost one heart
     // Pose the frame: oven + knife ahead, turkey on the tray.
     const lane = game.player.lane;
     const other = lane === 0 ? 2 : 0;
@@ -119,42 +143,64 @@ export function stageShot(game, name) {
     game.spawnObstacle('knife', lane === 1 ? 2 : 1, 30);
     game.coins.placeLineAhead(lane, 14);
     game.step(STEP);
+    // Prime the hazards: nearest oven + knife into frame, enlarged, cycles
+    // set to their "hot" moment at freeze.
+    const primed = game.obstacles.primeShotHazards();
+    game.setCameraShot(KITCHEN_CAMERA);
     game.hud.hideBanner();
+    showTurkey(game);
     game.render();
-    return `kitchen stage, turkey on the hoverboard tray, oven + knife ahead, board ${game.player.board ? 'active' : 'missed'}`;
+    return `kitchen stage, score ${Math.floor(game.score)}, 2 lives, turkey on the hoverboard tray, oven + knife primed ${JSON.stringify(primed)}`;
   }
 
   if (name === 'end') {
-    game.startRun(33);
-    game.lives = 1;
-    game.player.invuln = 0;
-    game.spawnObstacle('crate', game.player.lane, 9);
-    runForward(game, END_LIMIT_SECONDS, 4); // short horizon: the pilot is too late
+    // A real ESCAPED run: drive to 1,492 m, then let the real rules carry
+    // the turkey over the 1,500 m line so endRun(true) fires for real.
+    // Score is preset to the run's own scale (distance x 10 + bonuses):
+    // the escape itself adds the last metres, and saveBest then makes
+    // this run the best — so the end screen shows score = best.
+    game.startRun(47);
+    game.distance = 1492;
+    game.score = 14800;
+    game.coinCount = 24;
+    game.nearMiss = 9;
+    game.step(STEP); // stage is the kitchen; HUD shows the goal nearly done
+    runForward(game, 2, 16);
     if (game.state !== 'over') {
-      // The pilot dodged it: one more crate, then a forced final hit so the
-      // end screen (a real screen reached through the real code path) shows.
-      game.player.invuln = 0;
-      game.spawnObstacle('crate', game.player.lane, 2);
-      runForward(game, 2, 4);
+      // Still short of the line: step until the escape fires.
+      for (let i = 0; i < 600 && game.state !== 'over'; i += 1) game.step(STEP);
     }
-    if (game.state !== 'over') game._applyHit();
+    if (game.state !== 'over') game.endRun(true);
+    // Turkey clear of the right-hand card: the end camera looks from the
+    // right, so world +x is screen-left — right lane, fully in the open.
+    game.player.x = 2.4;
+    game.turkeyModel.group.position.set(2.4, game.player.y, 0);
+    game.setCameraShot(END_CAMERA);
     game.hud.hideBanner();
+    showTurkey(game);
     game.render();
-    return `caught end screen, score ${Math.floor(game.score)}`;
+    return `escaped end screen, score ${Math.floor(game.score)} (best ${game.hud.best}), distance ${Math.floor(game.distance)} m, ${game.nearMiss} near-miss`;
   }
 
-  // Default: the cover — a clean plain run in the farmyard.
+  // Default: the cover — a dramatic farmyard moment, not a calm run.
   game.startRun(7);
-  runForward(game, COVER_SECONDS, 16);
-  // Pose the frame: a fresh corn line ahead in the turkey's lane, farmer mid-gap.
+  runForward(game, 8, 16);
+  ensureNearMiss(game);
+  // Pose the frame: farmer right on the tail (~2.8 m) with a shout up,
+  // a fresh corn line ahead, the moment banner live at freeze.
+  game.poseFarmerForShot(2.8, 'CHASE');
   game.coins.placeLineAhead(game.player.lane, 13);
-  game.farmerGap = 12;
   game.step(STEP);
-  game.hud.hideBanner();
-  // Cursor over the pause button, so the shot shows an active cursor on a real control.
-  game.input.placeCursorOver(document.getElementById('btn-pause'));
+  // Farmer big in frame, well left of the turkey so the hero stays clear,
+  // tail clear of the banner.
+  game.farmerModel.group.position.set(game.player.x - 2.3, 0, -1.9);
+  game.farmerModel.group.scale.set(0.9, 0.9, 0.9);
+  game.setCameraShot(COVER_CAMERA);
+  game.hud.hideBanner(); // clear the near-miss lock so the cover banner lands
+  game.hud.showMoment(`THAT WAS CLOSE! +${40 * game.missions.multiplier}`, 'moment', 60);
+  showTurkey(game);
   game.render();
-  return `cover: plain run, farmer behind, corn ahead, score ${Math.floor(game.score)}`;
+  return `cover: farmer 2.8 m behind, near-miss ${game.nearMiss}, score ${Math.floor(game.score)}, moment banner live`;
 }
 
 // Read ?shot= from the URL so a plain browser load can stage a scene too.

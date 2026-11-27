@@ -155,7 +155,7 @@ async function runShots() {
     results.push(await shot(cdp, 'cover', '1-cover.jpg', 1280, 800, false));
     results.push(await shot(cdp, 'title', '2-title.jpg', 1280, 800, false));
     results.push(await shot(cdp, 'kitchen', '3-kitchen.jpg', 1280, 800, false));
-    results.push(await shot(cdp, 'end', '4-end.jpg', 540, 960, true));
+    results.push(await shot(cdp, 'end', '4-end.jpg', 1280, 800, false));
     const errors = cdp.errors();
     console.log(`console/network errors: ${errors.length}`);
     for (const e of errors.slice(0, 10)) console.log('  ', JSON.stringify(e).slice(0, 300));

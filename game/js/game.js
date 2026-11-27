@@ -5,7 +5,14 @@ import {
   LANES, GRAVITY, JUMP_VELOCITY, ROLL_SECONDS, INVULN_SECONDS,
   BOARD_SECONDS, MAGNET_SECONDS, SLOWMO_SECONDS, SLOWMO_FACTOR,
   START_LIVES, ESCAPE_DISTANCE, BASE_SPEED, MAX_SPEED, SPEED_PER_100M,
-  STAGES, mulberry32, clamp,
+  STAGES, FARMER_NAME, FARMER_SHOUTS, FARMER_SHOUT_RANGE,
+  FARMER_GAP_MIN, FARMER_GAP_MAX, FARMER_GAP_START,
+  LUNGE_RANGE, LUNGE_TELEGRAPH_SECONDS, LUNGE_FALLBACK,
+  CORNER_AFTER_SECONDS, CORNER_SECONDS, SEARCH_SECONDS,
+  DASH_SECONDS, DASH_SPEED_MULT, DASH_COOLDOWN_SECONDS,
+  DASH_STAMINA_COST, DASH_FARMER_PUSHBACK, STAMINA_REGEN_PER_SECOND,
+  NEAR_MISS_POINTS, LUNGE_DODGE_POINTS, DECOY_START_STOCK,
+  mulberry32, clamp,
 } from './config.js';
 import { Turkey } from './turkey.js';
 import { Farmer } from './farmer.js';
@@ -54,6 +61,8 @@ export class Game {
       onLane: (dir) => this.changeLane(dir),
       onJump: () => this.jump(),
       onRoll: () => this.roll(),
+      onDash: () => this.dash(),
+      onDecoy: () => this.throwDecoy(),
       onPause: () => this.togglePause(),
       onMute: () => this.toggleMute(),
       onConfirm: () => { if (this.state === 'title' || this.state === 'over') this.startRun(); },
@@ -82,9 +91,27 @@ export class Game {
     this.coinCount = 0;
     this.lives = START_LIVES;
     this.stageIndex = 0;
-    this.farmerGap = 14;
+    this.farmerGap = FARMER_GAP_START;
     this.speed = 0;
     this.shakeT = 0;
+    // Farmer brain: CHASE | SEARCH | CORNER | LUNGE (see step()).
+    this.farmerHold = false; // staging only: poseFarmerForShot freezes the brain
+    this.farmerState = 'CHASE';
+    this.farmerStateT = 0;
+    this.chaseT = 0;
+    this.lungeDodged = false;
+    this.cornerLane = 1;
+    this.shoutT = 0;
+    this.shoutIndex = 0;
+    this.currentShout = '';
+    // Verbs: dash + feather decoy.
+    this.stamina = 1;
+    this.dashT = 0;
+    this.dashCooldown = 0;
+    this.decoys = DECOY_START_STOCK;
+    this.nearMiss = 0;
+    // Per-shot camera framing (shots.js); null = the default chase camera.
+    this.cameraShot = null;
     this.random = mulberry32((Date.now() % 100000) | 0);
     this.player = {
       lane: 1, x: 0, y: 0, vy: 0,
@@ -145,12 +172,20 @@ export class Game {
     return {
       score: this.score,
       distance: this.distance,
+      stageIndex: this.stageIndex,
       stageName: STAGES[this.stageIndex].name,
       multiplier: this.missions.multiplier,
       coins: this.coinCount,
       lives: this.lives,
       missions: this.missions.snapshot(),
       powerup,
+      farmerGap: this.farmerGap,
+      farmerName: FARMER_NAME,
+      farmerState: this.farmerState,
+      stamina: this.stamina,
+      dashReady: this.dashCooldown <= 0 && this.stamina >= DASH_STAMINA_COST,
+      decoys: this.decoys,
+      shout: this.currentShout,
     };
   }
 
@@ -160,13 +195,27 @@ export class Game {
     this.sound.startAmbience();
     this.sound.gobble();
     this.random = mulberry32(seed !== undefined ? seed : (Date.now() % 100000) | 0);
+    this.time = 0;
+    this.turkeyModel.runPhase = 0;
+    this.farmerModel.runPhase = 0;
+    this.farmerHold = false;
     this.distance = 0;
     this.score = 0;
     this.coinCount = 0;
     this.lives = START_LIVES;
     this.stageIndex = 0;
-    this.farmerGap = 14;
+    this.farmerGap = FARMER_GAP_START;
     this.shakeT = 0;
+    this.farmerState = 'CHASE';
+    this.farmerStateT = 0;
+    this.chaseT = 0;
+    this.lungeDodged = false;
+    this.currentShout = '';
+    this.stamina = 1;
+    this.dashT = 0;
+    this.dashCooldown = 0;
+    this.decoys = DECOY_START_STOCK;
+    this.nearMiss = 0;
     this.player = {
       lane: 1, x: 0, y: 0, vy: 0,
       rolling: false, rollT: 0, invuln: 0,
@@ -181,7 +230,7 @@ export class Game {
     this.turkeyModel.group.scale.set(1, 1, 1);
     this.state = 'playing';
     this.hud.showScreen('play');
-    this.hud.showBanner('FARMYARD', 'THE GREAT ESCAPE BEGINS');
+    this.hud.showBanner('FARMYARD', 'THE GREAT ESCAPE BEGINS', 'moment', 1.6);
     this.hud.update(this._hudState());
   }
 
@@ -214,6 +263,7 @@ export class Game {
     this.hud.showEnd(escaped, {
       score: this.score, distance: this.distance,
       coins: this.coinCount, multiplier: this.missions.multiplier,
+      nearMiss: this.nearMiss,
     });
     // Freeze the caught pose: turkey down, farmer right on top of it.
     if (!escaped) {
@@ -235,14 +285,60 @@ export class Game {
   changeLane(dir) {
     if (this.state !== 'playing') return;
     const next = clamp(this.player.lane + dir, 0, 2);
-    if (next !== this.player.lane) this.player.lane = next;
+    if (next !== this.player.lane) {
+      this.player.lane = next;
+      if (this.farmerState === 'LUNGE') this.lungeDodged = true;
+    }
   }
+
+  // Feather dash (Shift): 0.38 s at 1.55x speed, stamina cost, and the burst
+  // shoves the farmer back. A dash during a lunge telegraph dodges the grab.
+  dash() {
+    if (this.state !== 'playing') return;
+    if (this.dashCooldown > 0 || this.stamina < DASH_STAMINA_COST) return;
+    this.dashT = DASH_SECONDS;
+    this.dashCooldown = DASH_COOLDOWN_SECONDS;
+    this.stamina -= DASH_STAMINA_COST;
+    this.farmerGap = clamp(this.farmerGap + DASH_FARMER_PUSHBACK, FARMER_GAP_MIN, FARMER_GAP_MAX);
+    if (this.farmerState === 'LUNGE') this.lungeDodged = true;
+    this.sound.jump();
+  }
+
+  // Feather decoy (Q): toss a lure into another lane; the farmer SEARCHes it.
+  throwDecoy() {
+    if (this.state !== 'playing') return;
+    if (this.decoys <= 0) { this.hud.showToast('No decoys left!'); return; }
+    this.decoys -= 1;
+    const other = [0, 1, 2].filter((l) => l !== this.player.lane);
+    const lane = other[Math.floor(this.random() * other.length)];
+    this.farmerState = 'SEARCH';
+    this.farmerStateT = SEARCH_SECONDS;
+    this.searchLane = lane;
+    this.hud.showMoment('WRONG BIRD!', 'hide', 1.2);
+    this.sound.powerup();
+  }
+
+  // Screenshot staging: pose the farmer at an exact gap + state (cover/title).
+  poseFarmerForShot(gap, state) {
+    this.farmerGap = clamp(gap, FARMER_GAP_MIN, FARMER_GAP_MAX);
+    this.farmerState = state || 'CHASE';
+    this.farmerStateT = 0;
+    this.chaseT = 0;
+    this.farmerHold = true; // hold this exact gap + state for the photo
+    this.currentShout = this.farmerGap < FARMER_SHOUT_RANGE ? FARMER_SHOUTS[0] : '';
+    this.shoutT = 2.5;
+    this.hud.update(this._hudState());
+  }
+
+  setCameraShot(preset) { this.cameraShot = preset; }
+  clearCameraShot() { this.cameraShot = null; }
 
   jump() {
     if (this.state !== 'playing') return;
     if (this.player.y === 0 && !this.player.rolling) {
       this.player.vy = JUMP_VELOCITY;
       this.player.y = 0.01;
+      if (this.farmerState === 'LUNGE') this.lungeDodged = true;
       this.sound.jump();
     }
   }
@@ -252,6 +348,7 @@ export class Game {
     if (this.player.y === 0 && !this.player.rolling) {
       this.player.rolling = true;
       this.player.rollT = ROLL_SECONDS;
+      if (this.farmerState === 'LUNGE') this.lungeDodged = true;
       this.sound.roll();
     }
   }
@@ -262,7 +359,17 @@ export class Game {
     v = Math.min(MAX_SPEED, v);
     if (this.player.slowmo > 0) v *= SLOWMO_FACTOR;
     if (this.player.board) v += 2;
+    if (this.dashT > 0) v *= DASH_SPEED_MULT;
     return v;
+  }
+
+  // A near-miss: cleared an obstacle at arm's length, or slipped past a
+  // dodge obstacle in the next lane. Worth points + a moment banner.
+  _nearMiss() {
+    this.nearMiss += 1;
+    const points = NEAR_MISS_POINTS * this.missions.multiplier;
+    this.score += points;
+    this.hud.showMoment(`THAT WAS CLOSE! +${points}`, 'moment', 1.2);
   }
 
   _applyHit() {
@@ -276,7 +383,9 @@ export class Game {
     }
     this.lives -= 1;
     this.player.invuln = INVULN_SECONDS;
-    this.farmerGap = Math.max(6, this.farmerGap - 4);
+    this.farmerGap = Math.max(FARMER_GAP_MIN, this.farmerGap - 4);
+    this.farmerState = 'CHASE';
+    this.chaseT = 0;
     this.shakeT = 0.45;
     this.sound.thud();
     this.sound.gobble();
@@ -308,7 +417,7 @@ export class Game {
       this.time += dt;
       this.track.update(dt, 2.5, this.random);
       this.turkeyModel.update(dt, 'idle', 0);
-      this.farmerModel.update(dt, 0.1, 0.6);
+      this.farmerModel.update(dt, 0.1, 0.6, 'SEARCH');
       this.farmerModel.group.position.set(-1.8, 0, -2.6);
       this.farmerModel.group.scale.set(0.75, 0.75, 0.75);
       return;
@@ -327,7 +436,7 @@ export class Game {
     if (stage !== this.stageIndex) {
       this.stageIndex = stage;
       this.track.setStage(stage, this.random);
-      this.hud.showBanner(STAGES[stage].name, STAGES[stage].sub);
+      this.hud.showBanner(STAGES[stage].name, STAGES[stage].sub, 'moment', 1.6);
       this.sound.stageFanfare();
     }
 
@@ -345,6 +454,9 @@ export class Game {
       if (this.player.rollT <= 0) this.player.rolling = false;
     }
     if (this.player.invuln > 0) this.player.invuln -= dt;
+    if (this.dashT > 0) this.dashT -= dt;
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    this.stamina = Math.min(1, this.stamina + STAMINA_REGEN_PER_SECOND * dt);
     if (this.player.board) {
       this.player.board.left -= dt;
       if (this.player.board.left <= 0) { this.player.board = null; this.boardMesh.visible = false; }
@@ -362,10 +474,18 @@ export class Game {
     const hit = this.obstacles.checkHit(this.player);
     if (hit) {
       if (hit.type === 'hit') this._applyHit();
-      else if (hit.type === 'jumped') this.missions.event('jump', 1);
+      else if (hit.type === 'jumped') { this.missions.event('jump', 1); this._nearMiss(); }
+      else if (hit.type === 'rolled') this._nearMiss();
     }
     const dodged = this.obstacles.passedCount(this.player);
     if (dodged > 0) this.missions.event('dodge', dodged);
+    // Slipped past a dodge obstacle in the next lane: another near-miss.
+    for (const o of this.obstacles.list) {
+      if (!o.nearCounted && o.passed && o.mode === 'dodge' && Math.abs(o.lane - this.player.lane) === 1) {
+        o.nearCounted = true;
+        this._nearMiss();
+      }
+    }
 
     // Pickups.
     const got = this.coins.collect(this.player, this.player.magnet > 0);
@@ -378,24 +498,91 @@ export class Game {
     if (got.lines > 0) this.missions.event('line', got.lines);
     if (got.powerup) this._applyPowerup(got.powerup);
 
-    // The farmer: clean running pushes him back and to the side, stumbles
-    // pull him in toward the turkey's tail. He runs between the camera and
-    // the turkey, so he reads as "right behind you" without covering the hero.
-    this.farmerGap = clamp(this.farmerGap + 0.45 * dt, 6, 22);
+    // The farmer brain: CHASE closes the gap; SEARCH (decoy) lets it open;
+    // CORNER cuts a lane off; LUNGE is a telegraphed grab the turkey dodges
+    // by moving, jumping, rolling or dashing during the wind-up.
+    const closeRate = STAGES[this.stageIndex].closeRate;
+    if (this.farmerHold) {
+      // Staged pose: the brain holds still, the body still animates.
+    } else if (this.farmerState === 'SEARCH') {
+      this.farmerStateT -= dt;
+      this.farmerGap = clamp(this.farmerGap + 1.2 * dt, FARMER_GAP_MIN, FARMER_GAP_MAX);
+      if (this.farmerStateT <= 0) {
+        this.farmerState = 'CHASE';
+        this.chaseT = 0;
+        this.hud.showMoment('SPOTTED!', 'danger', 0.9);
+      }
+    } else if (this.farmerState === 'LUNGE') {
+      this.farmerStateT -= dt;
+      if (this.farmerStateT <= 0) {
+        if (this.lungeDodged) {
+          this.farmerGap = clamp(this.farmerGap + LUNGE_FALLBACK, FARMER_GAP_MIN, FARMER_GAP_MAX);
+          const pts = LUNGE_DODGE_POINTS * this.missions.multiplier;
+          this.score += pts;
+          this.hud.showMoment(`SLIPPED THE GRAB! +${pts}`, 'moment', 1.2);
+        } else {
+          this._applyHit();
+        }
+        // Either way he is a few metres back now — no instant re-lunge.
+        this.farmerGap = Math.max(this.farmerGap, 6);
+        this.farmerState = 'CHASE';
+        this.chaseT = 0;
+      }
+    } else if (this.farmerState === 'CORNER') {
+      this.farmerStateT -= dt;
+      this.farmerGap = clamp(this.farmerGap - closeRate * 2 * dt, FARMER_GAP_MIN, FARMER_GAP_MAX);
+      if (this.farmerStateT <= 0) { this.farmerState = 'CHASE'; this.chaseT = 0; }
+    } else { // CHASE
+      this.chaseT += dt;
+      this.farmerGap = clamp(this.farmerGap - closeRate * dt, FARMER_GAP_MIN, FARMER_GAP_MAX);
+      if (this.farmerGap <= LUNGE_RANGE) {
+        this.farmerState = 'LUNGE';
+        this.farmerStateT = LUNGE_TELEGRAPH_SECONDS;
+        this.lungeDodged = false;
+        this.hud.showMoment("HE'S GRABBING!", 'danger', 0.6);
+      } else if (this.chaseT >= CORNER_AFTER_SECONDS) {
+        this.farmerState = 'CORNER';
+        this.farmerStateT = CORNER_SECONDS;
+        this.cornerLane = this.player.lane === 1
+          ? (this.random() < 0.5 ? 0 : 2) : 1;
+        this.hud.showMoment('CUT OFF!', 'danger', 1.0);
+      }
+    }
+    // Farmer shouts: rotate our 3 lines while he is close.
+    if (this.farmerGap < FARMER_SHOUT_RANGE && (this.farmerState === 'CHASE' || this.farmerState === 'LUNGE')) {
+      this.shoutT -= dt;
+      if (this.shoutT <= 0) {
+        this.currentShout = FARMER_SHOUTS[this.shoutIndex % FARMER_SHOUTS.length];
+        this.shoutIndex += 1;
+        this.shoutT = 2.5;
+      }
+    } else {
+      this.currentShout = '';
+    }
     if (this.distance >= ESCAPE_DISTANCE) this.endRun(true);
 
     // Poses + positions.
-    const pose = this.player.board ? 'board'
+    const pose = this.dashT > 0 ? 'dash'
+      : this.player.board ? 'board'
       : this.player.y > 0 ? 'jump'
       : this.player.rolling ? 'roll'
       : this.state === 'over' ? 'caught' : 'run';
     this.turkeyModel.update(dt, pose, v / MAX_SPEED);
     this.turkeyModel.group.position.set(this.player.x, this.player.y, 0);
     this.turkeyModel.group.visible = !(this.player.invuln > 0 && Math.floor(this.time * 10) % 2 === 0);
-    const gapNorm = (this.farmerGap - 6) / 16;
-    this.farmerModel.update(dt, v / MAX_SPEED, gapNorm);
+    const gapNorm = (this.farmerGap - FARMER_GAP_MIN) / (FARMER_GAP_MAX - FARMER_GAP_MIN);
+    this.farmerModel.update(dt, v / MAX_SPEED, gapNorm, this.farmerState);
+    // He runs between the camera and the turkey, so he reads as "right
+    // behind you" without covering the hero. SEARCH sweeps the lanes,
+    // CORNER cuts toward the blocking lane, LUNGE leans straight in.
+    let farmerX = this.player.x * 0.85 - gapNorm * 2.4;
+    if (this.farmerState === 'SEARCH') farmerX = Math.sin(this.time * 0.9) * 2.2;
+    else if (this.farmerState === 'CORNER') {
+      const k = 1 - Math.max(0, this.farmerStateT / CORNER_SECONDS);
+      farmerX = farmerX * (1 - k) + LANES[this.cornerLane] * 0.9 * k;
+    }
     this.farmerModel.group.position.set(
-      this.player.x * 0.85 - gapNorm * 2.4,
+      farmerX,
       0,
       -2.0 - gapNorm * 1.2,
     );
@@ -411,8 +598,16 @@ export class Game {
     const shake = this.shakeT > 0 ? this.shakeT * 0.35 : 0;
     const sx = (Math.random() - 0.5) * shake;
     const sy = (Math.random() - 0.5) * shake;
-    this.camera.position.set(tx + sx, 3.7 + sy, -6.6);
-    this.camera.lookAt(tx * 1.2, 1.25, 8);
+    if (this.cameraShot) {
+      // Per-shot framing (shots.js): [x, y, z] + look-at [x, y, z].
+      const [px, py, pz] = this.cameraShot.pos;
+      const [lx, ly, lz] = this.cameraShot.look;
+      this.camera.position.set(px + sx, py + sy, pz);
+      this.camera.lookAt(lx, ly, lz);
+    } else {
+      this.camera.position.set(tx + sx, 3.7 + sy, -6.6);
+      this.camera.lookAt(tx * 1.2, 1.25, 8);
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -460,6 +655,12 @@ window.__turkey = {
     multiplier: game.missions.multiplier,
     board: !!game.player.board,
     stage: STAGES[game.stageIndex].name,
+    farmerGap: +game.farmerGap.toFixed(1),
+    farmerState: game.farmerState,
+    nearMiss: game.nearMiss,
+    stamina: +game.stamina.toFixed(2),
+    decoys: game.decoys,
+    best: game.hud.best,
   }),
 };
 requestAnimationFrame(() => {
