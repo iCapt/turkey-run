@@ -1,37 +1,109 @@
-// Turkey Runner — headless driver (Node 22 stdlib only): serves game/,
-// drives Chromium 1255 over CDP, and either takes the 4 screenshots
-// (`node drive.mjs shots`) or runs the scripted controls test
-// (`node drive.mjs test`). Nothing here ships in the entry.
+// drive.mjs — drives the game in headless Chrome over the DevTools protocol.
+//   node drive.mjs test   — the scripted checks (title, play, verbs, end, phone)
+//   node drive.mjs shots  — the four staged screenshots, 1280x800, deterministic
+// Node standard library only, plus a system Chrome (Playwright's cached build
+// works). No npm install, no browser extension, no network.
+
 import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-import http from 'node:http';
-import path from 'node:path';
+import { createServer as createHttpServer } from 'node:http';
+import { createServer as createNetServer } from 'node:net';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { extname, join, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CHROME = '/home/hatch/.cache/ms-playwright/chromium-1255/chrome-linux64/chrome';
-const PORT = 8091;
-const DEBUG_PORT = 9222;
+const ROOT = dirname(fileURLToPath(import.meta.url));
+const GAME_DIR = join(ROOT, 'game');
+const SHOTS_DIR = join(ROOT, 'screenshots');
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const CHROME_CANDIDATES = [
+  join(process.env.HOME || '', '.cache/ms-playwright/chromium-1255/chrome-linux64/chrome'),
+  join(process.env.HOME || '', '.cache/ms-playwright/chromium_headless_shell-1255/chrome-headless-shell-linux64/chrome-headless-shell'),
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+];
 
-function getJson(url) {
-  return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
-      let data = '';
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
-    }).on('error', reject);
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+};
+
+function findChrome() {
+  for (const c of CHROME_CANDIDATES) if (existsSync(c)) return c;
+  throw new Error('drive.mjs: no Chrome found; set CHROME_BIN or install one');
+}
+
+function freePort() {
+  return new Promise((resolvePort) => {
+    const s = createNetServer();
+    s.listen(0, '127.0.0.1', () => {
+      const port = s.address().port;
+      s.close(() => resolvePort(port));
+    });
   });
 }
 
-async function waitFor(predicate, timeoutMs, label) {
+function serve(root, port) {
+  const server = createHttpServer(async (req, res) => {
+    try {
+      const url = new URL(req.url || '/', `http://127.0.0.1:${port}`);
+      let rel = decodeURIComponent(url.pathname);
+      if (rel === '/') rel = '/game/index.html';
+      const filePath = resolve(join(root, rel.replace(/^[/\\]+/, '')));
+      if (!filePath.startsWith(root + sep) && filePath !== root) {
+        res.writeHead(403);
+        res.end('forbidden');
+        return;
+      }
+      const data = readFileSync(filePath);
+      res.writeHead(200, { 'content-type': MIME[extname(filePath).toLowerCase()] || 'application/octet-stream' });
+      res.end(data);
+    } catch {
+      res.writeHead(404);
+      res.end('not found');
+    }
+  });
+  return new Promise((resolveServer) => server.listen(port, '127.0.0.1', () => resolveServer(server)));
+}
+
+async function httpJson(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return res.json();
+}
+
+async function waitFor(fn, timeoutMs, label) {
   const start = Date.now();
   for (;;) {
-    if (await predicate()) return true;
+    const v = await fn();
+    if (v) return v;
     if (Date.now() - start > timeoutMs) throw new Error(`timeout waiting for ${label}`);
-    await sleep(150);
+    await new Promise((r) => setTimeout(r, 120));
   }
+}
+
+// Poll a boolean expression in the page until it is true (or the timeout
+// runs out). SwiftShader renders slowly, so the game advances in game-time,
+// not wall-clock time — fixed sleeps are not reliable here.
+async function waitState(cdp, expr, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      if (await cdp.evaluate(expr)) return true;
+    } catch {
+      // The page may still be loading; keep waiting.
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
 }
 
 class Cdp {
@@ -40,281 +112,333 @@ class Cdp {
     this.nextId = 1;
     this.pending = new Map();
     this.events = [];
-    this.ready = new Promise((resolve, reject) => {
-      this.ws.onopen = resolve;
-      this.ws.onerror = reject;
-    });
-    this.ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.id && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
-        this.pending.delete(msg.id);
-        if (msg.error) reject(new Error(`${msg.error.code}: ${msg.error.message}`));
-        else resolve(msg.result);
-      } else if (msg.method) {
-        this.events.push(msg);
+    this.consoleErrors = [];
+    this.ws.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+      if (data.id && this.pending.has(data.id)) {
+        const { resolve, reject } = this.pending.get(data.id);
+        this.pending.delete(data.id);
+        if (data.error) reject(new Error(`${data.error.message} (${data.error.code})`));
+        else resolve(data.result);
+      } else if (data.method) {
+        this.events.push(data);
+        if (data.method === 'Runtime.consoleAPICalled' && data.params.type === 'error') {
+          this.consoleErrors.push(data.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
+        }
+        if (data.method === 'Runtime.exceptionThrown') {
+          this.consoleErrors.push(data.params.exceptionDetails?.text || 'exception');
+        }
       }
     };
   }
 
-  async call(method, params = {}) {
-    await this.ready;
-    const id = this.nextId;
-    this.nextId += 1;
-    const result = new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
-    this.ws.send(JSON.stringify({ id, method, params }));
-    return result;
+  ready() {
+    return new Promise((resolveReady, rejectReady) => {
+      this.ws.onopen = resolveReady;
+      this.ws.onerror = rejectReady;
+    });
+  }
+
+  send(method, params = {}) {
+    const id = this.nextId++;
+    return new Promise((resolveSend, rejectSend) => {
+      this.pending.set(id, { resolve: resolveSend, reject: rejectSend });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
   }
 
   async evaluate(expression) {
-    const r = await this.call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
-    if (r.exceptionDetails) throw new Error(`evaluate failed: ${JSON.stringify(r.exceptionDetails).slice(0, 400)}`);
-    return r.result ? r.result.value : undefined;
+    const r = await this.send('Runtime.evaluate', {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (r.exceptionDetails) throw new Error(`evaluate failed: ${r.exceptionDetails.text}`);
+    return r.result?.value;
   }
 
-  errors() {
-    return this.events.filter((e) =>
-      (e.method === 'Runtime.exceptionThrown')
-      || (e.method === 'Runtime.consoleAPICalled' && e.params.type === 'error')
-      || (e.method === 'Log.entryAdded' && e.params.entry.level === 'error')
-      || (e.method === 'Network.loadingFailed'));
+  async key(code, key, type) {
+    await this.send('Input.dispatchKeyEvent', {
+      type,
+      code,
+      key,
+      windowsVirtualKeyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
+    });
   }
-}
 
-async function launch() {
-  const server = spawn(process.execPath, ['serve.mjs', String(PORT)], { cwd: HERE, stdio: 'ignore' });
-  const chrome = spawn(CHROME, [
-    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
-    '--use-angle=swiftshader', '--hide-scrollbars',
-    `--remote-debugging-port=${DEBUG_PORT}`,
-    '--window-size=1280,800', 'about:blank',
-  ], { stdio: 'ignore' });
-  const cleanup = () => { try { chrome.kill('SIGKILL'); } catch (e) {} try { server.kill('SIGKILL'); } catch (e) {} };
-  process.on('exit', cleanup);
-  process.on('SIGINT', () => { cleanup(); process.exit(1); });
+  async press(code, key) {
+    await this.key(code, key, 'keyDown');
+    await new Promise((r) => setTimeout(r, 60));
+    await this.key(code, key, 'keyUp');
+  }
 
-  await waitFor(async () => {
-    try { await getJson(`http://127.0.0.1:${DEBUG_PORT}/json/version`); return true; } catch (e) { return false; }
-  }, 30000, 'chrome devtools');
-  await waitFor(async () => {
+  async screenshot() {
+    const r = await this.send('Page.captureScreenshot', { format: 'jpeg', quality: 82 });
+    return Buffer.from(r.data, 'base64');
+  }
+
+  async navigate(url) {
+    await this.send('Page.navigate', { url });
+    await waitFor(async () => {
+      try {
+        return await this.evaluate('!!window.__TURKEY');
+      } catch {
+        return false;
+      }
+    }, 30000, 'window.__TURKEY');
+  }
+
+  async setViewport(width, height) {
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: width < 600,
+    });
+  }
+
+  close() {
     try {
-      const ok = await new Promise((resolve) => {
-        http.get(`http://127.0.0.1:${PORT}/index.html`, (res) => { res.resume(); resolve(res.statusCode === 200); }).on('error', () => resolve(false));
-      });
-      return ok;
-    } catch (e) { return false; }
-  }, 10000, 'game server');
-  const targets = await getJson(`http://127.0.0.1:${DEBUG_PORT}/json/list`);
+      this.ws.close();
+    } catch {
+      // Already closed.
+    }
+  }
+}
+
+function jpegSize(buf) {
+  // Walk the JPEG markers to the frame header (SOF0/SOF2) and read its size.
+  let i = 2;
+  while (i < buf.length - 9) {
+    if (buf[i] !== 0xff) {
+      i += 1;
+      continue;
+    }
+    const marker = buf[i + 1];
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2;
+      continue;
+    }
+    const len = buf.readUInt16BE(i + 2);
+    if (marker === 0xc0 || marker === 0xc2) {
+      const height = buf.readUInt16BE(i + 5);
+      const width = buf.readUInt16BE(i + 7);
+      return { width, height };
+    }
+    i += 2 + len;
+  }
+  return null;
+}
+
+async function launch(base, debugPort, viewW = 1280, viewH = 800) {
+  const chrome = process.env.CHROME_BIN || findChrome();
+  const profile = join(tmpdir(), `turkey-drive-${process.pid}`);
+  mkdirSync(profile, { recursive: true });
+  const child = spawn(chrome, [
+    '--headless=new',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    '--enable-unsafe-swiftshader',
+    '--hide-scrollbars',
+    '--no-first-run',
+    `--remote-debugging-port=${debugPort}`,
+    `--window-size=${viewW},${viewH}`,
+    `--user-data-dir=${profile}`,
+    'about:blank',
+  ], { stdio: 'ignore' });
+  const version = await waitFor(async () => {
+    try {
+      return await httpJson(`http://127.0.0.1:${debugPort}/json/version`);
+    } catch {
+      return null;
+    }
+  }, 30000, 'Chrome DevTools');
+  const targets = await httpJson(`http://127.0.0.1:${debugPort}/json/list`);
   const page = targets.find((t) => t.type === 'page');
+  if (!page) throw new Error('no page target');
   const cdp = new Cdp(page.webSocketDebuggerUrl);
-  await cdp.call('Page.enable');
-  await cdp.call('Runtime.enable');
-  await cdp.call('Log.enable');
-  await cdp.call('Network.enable');
-  return { cdp, cleanup };
+  await cdp.ready();
+  await cdp.send('Page.enable');
+  await cdp.send('Runtime.enable');
+  await cdp.setViewport(viewW, viewH);
+  void version;
+  return { child, cdp, base };
 }
 
-async function loadGame(cdp, width, height, mobile) {
-  if (mobile) {
-    await cdp.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true });
-  } else {
-    await cdp.call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-  }
-  await cdp.call('Page.navigate', { url: `http://127.0.0.1:${PORT}/index.html` });
-  await waitFor(async () => {
-    try { return await cdp.evaluate('window.__turkeyReady === true'); } catch (e) { return false; }
-  }, 30000, 'game ready');
-  const webgl = await cdp.evaluate('!!document.querySelector("canvas")');
-  if (!webgl) throw new Error('no canvas');
-}
+async function runTests() {
+  const serverPort = await freePort();
+  const debugPort = await freePort();
+  const server = await serve(ROOT, serverPort);
+  const base = `http://127.0.0.1:${serverPort}`;
+  // The checks are state, not pixels: run them at 800x500 so the software
+  // renderer keeps up even when the machine is busy. The shots stay 1280x800.
+  const { child, cdp } = await launch(base, debugPort, 800, 500);
+  const results = [];
+  const check = (name, pass, detail) => {
+    results.push({ name, pass, detail });
+    console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
+  };
+  try {
+    await cdp.navigate(`${base}/game/index.html?seed=7`);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function shot(cdp, name, file, width, height, mobile) {
-  await loadGame(cdp, width, height, mobile);
-  const description = await cdp.evaluate(`window.__turkey.stageShot(${JSON.stringify(name)})`);
-  await sleep(400);
-  if (name === 'cover') {
-    // Move the real mouse onto the pause button as well, so its hover state shows.
-    const rect = await cdp.evaluate(`(() => { const r = document.getElementById('btn-pause').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-    await cdp.call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: rect.x, y: rect.y });
-    await sleep(200);
+    // 1. Title screen is up on load.
+    check('title-visible', await cdp.evaluate(`window.__TURKEY.phase === 'TITLE' && !document.getElementById('screen-title').classList.contains('hidden')`));
+
+    // 2. START RUN begins a run.
+    await cdp.evaluate(`document.getElementById('btn-start').click()`);
+    check('start', await waitState(cdp, `window.__TURKEY.phase === 'RUN'`, 5000));
+
+    // 3-4. Lanes change left, then right.
+    const lane0 = await cdp.evaluate(`window.__TURKEY.lane`);
+    await cdp.press('ArrowLeft', 'ArrowLeft');
+    const laneLeftOk = await waitState(cdp, `window.__TURKEY.lane === ${lane0 - 1}`, 5000);
+    const laneL = await cdp.evaluate(`window.__TURKEY.lane`);
+    check('lane-left', laneLeftOk, `lane ${lane0} -> ${laneL}`);
+    await cdp.press('ArrowRight', 'ArrowRight');
+    const laneRightOk = await waitState(cdp, `window.__TURKEY.lane === ${lane0}`, 5000);
+    const laneR = await cdp.evaluate(`window.__TURKEY.lane`);
+    check('lane-right', laneRightOk, `lane ${laneL} -> ${laneR}`);
+
+    // 5. Jump leaves the ground.
+    await cdp.press('Space', ' ');
+    check('jump', await waitState(cdp, `window.__TURKEY.airborne === true`, 5000));
+
+    // 6. Roll tucks the bird (wait to land first — SwiftShader runs slow, so
+    // retry the press if the bird is still coming down from the jump).
+    let rolled = false;
+    for (let attempt = 0; attempt < 3 && !rolled; attempt++) {
+      await waitState(cdp, `window.__TURKEY.airborne === false`, 20000);
+      await cdp.press('KeyS', 's');
+      rolled = await waitState(cdp, `window.__TURKEY.rolling === true`, 8000);
+    }
+    check('roll', rolled);
+
+    // 7. Dash fires and spends stamina.
+    await waitState(cdp, `window.__TURKEY.rolling === false`, 10000);
+    const stamina0 = await cdp.evaluate(`window.__TURKEY.stamina`);
+    await cdp.press('ShiftLeft', 'Shift');
+    const dashing = await waitState(cdp, `window.__TURKEY.dashing === true`, 5000);
+    const stamina1 = await cdp.evaluate(`window.__TURKEY.stamina`);
+    check('dash', dashing && stamina1 < stamina0, `stamina ${stamina0.toFixed(2)} -> ${stamina1.toFixed(2)}`);
+
+    // 8. Decoy spends one stock and confuses the farmer.
+    await cdp.press('KeyQ', 'q');
+    const decoyOk = await waitState(cdp, `window.__TURKEY.decoys === 1 && window.__TURKEY.farmerState === 'SEARCH'`, 5000);
+    const decoyState = await cdp.evaluate(`({ decoys: window.__TURKEY.decoys, farmer: window.__TURKEY.farmerState })`);
+    check('decoy', decoyOk, `decoys ${decoyState.decoys}, farmer ${decoyState.farmer}`);
+
+    // 9. The score climbs while running.
+    const score0 = await cdp.evaluate(`window.__TURKEY.score`);
+    const scoreRose = await waitState(cdp, `window.__TURKEY.score > ${score0}`, 20000);
+    const score1 = await cdp.evaluate(`window.__TURKEY.score`);
+    check('score-increases', scoreRose, `${score0} -> ${score1}`);
+
+    // 10. A crate in the turkey's lane costs a life. Retry with a fresh crate
+    // if the bird is still blinking from an earlier hit.
+    const lives0 = await cdp.evaluate(`window.__TURKEY.lives`);
+    let hit = false;
+    for (let attempt = 0; attempt < 3 && !hit; attempt++) {
+      await cdp.evaluate(`window.__TURKEY.debug.spawnObstacleAtTurkey('crate')`);
+      hit = await waitState(cdp, `window.__TURKEY.lives === ${lives0 - 1}`, 6000);
+    }
+    const lives1 = await cdp.evaluate(`window.__TURKEY.lives`);
+    check('collision-loses-life', hit, `lives ${lives0} -> ${lives1}`);
+
+    // 11-12. Pause, then resume.
+    await cdp.press('KeyP', 'p');
+    check('pause', await waitState(cdp, `window.__TURKEY.phase === 'PAUSED' && !document.getElementById('screen-pause').classList.contains('hidden')`, 5000));
+    await cdp.press('KeyP', 'p');
+    check('resume', await waitState(cdp, `window.__TURKEY.phase === 'RUN'`, 5000));
+
+    // 13. Mute toggles.
+    await cdp.press('KeyM', 'm');
+    const muted = await waitState(cdp, `window.__TURKEY.muted === true`, 3000);
+    await cdp.press('KeyM', 'm');
+    const unmuted = await waitState(cdp, `window.__TURKEY.muted === false`, 3000);
+    check('mute', muted === true && unmuted, `muted ${muted}, back ${unmuted}`);
+
+    // 14. One life left plus one more crate ends the run, caught.
+    await cdp.evaluate(`window.__TURKEY.debug.setLives(1)`);
+    let caught = false;
+    for (let attempt = 0; attempt < 3 && !caught; attempt++) {
+      await cdp.evaluate(`window.__TURKEY.debug.spawnObstacleAtTurkey('crate')`);
+      caught = await waitState(cdp, `window.__TURKEY.phase === 'END'`, 6000);
+    }
+    const endState = await cdp.evaluate(`({ phase: window.__TURKEY.phase, title: document.getElementById('end-title').textContent, visible: !document.getElementById('screen-end').classList.contains('hidden') })`);
+    check('caught-end', caught && endState.title === 'CAUGHT!' && endState.visible, JSON.stringify(endState));
+
+    // 15. RUN AGAIN starts a fresh run.
+    await cdp.evaluate(`document.getElementById('btn-again').click()`);
+    const againOk = await waitState(cdp, `window.__TURKEY.phase === 'RUN'`, 5000);
+    const again = await cdp.evaluate(`({ phase: window.__TURKEY.phase, score: window.__TURKEY.score, lives: window.__TURKEY.lives })`);
+    check('restart', againOk && again.score < 50 && again.lives === 3, JSON.stringify(again));
+
+    // 16. A phone viewport does not overflow horizontally.
+    await cdp.setViewport(390, 844);
+    await cdp.navigate(`${base}/game/index.html?seed=7`);
+    await sleep(600);
+    const overflow = await cdp.evaluate(`({ doc: document.documentElement.scrollWidth, body: document.body.scrollWidth, inner: window.innerWidth })`);
+    check('phone-no-overflow', overflow.doc <= 391 && overflow.body <= 391, JSON.stringify(overflow));
+    await cdp.setViewport(800, 500);
+
+    // 17. Nothing errored in the console along the way.
+    check('no-console-errors', cdp.consoleErrors.length === 0, cdp.consoleErrors.slice(0, 3).join(' | '));
+  } finally {
+    cdp.close();
+    child.kill();
+    server.close();
   }
-  const jpg = await cdp.call('Page.captureScreenshot', { format: 'jpeg', quality: 82 });
-  const out = path.join(HERE, 'screenshots', file);
-  fs.writeFileSync(out, Buffer.from(jpg.data, 'base64'));
-  const size = fs.statSync(out).size;
-  const state = await cdp.evaluate('window.__turkey.state()');
-  console.log(`${file}: ${size} bytes (${(size / 1024).toFixed(1)} KiB) ${size <= 262144 ? 'OK' : 'OVER 256 KiB!'} — ${description}`);
-  console.log(`   state: ${JSON.stringify(state)}`);
-  return { file, size, description, state };
+  const failed = results.filter((r) => !r.pass);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ` — FAILED: ${failed.map((r) => r.name).join(', ')}` : ' — ALL CHECKS PASSED'}`);
+  process.exit(failed.length ? 1 : 0);
 }
 
 async function runShots() {
-  const { cdp, cleanup } = await launch();
+  const serverPort = await freePort();
+  const debugPort = await freePort();
+  const server = await serve(ROOT, serverPort);
+  const base = `http://127.0.0.1:${serverPort}`;
+  const { child, cdp } = await launch(base, debugPort);
+  const shots = [
+    ['cover', '1-cover.jpg'],
+    ['title', '2-title.jpg'],
+    ['kitchen', '3-kitchen.jpg'],
+    ['end', '4-end.jpg'],
+  ];
   try {
-    const results = [];
-    results.push(await shot(cdp, 'cover', '1-cover.jpg', 1280, 800, false));
-    results.push(await shot(cdp, 'title', '2-title.jpg', 1280, 800, false));
-    results.push(await shot(cdp, 'kitchen', '3-kitchen.jpg', 1280, 800, false));
-    results.push(await shot(cdp, 'end', '4-end.jpg', 1280, 800, false));
-    const errors = cdp.errors();
-    console.log(`console/network errors: ${errors.length}`);
-    for (const e of errors.slice(0, 10)) console.log('  ', JSON.stringify(e).slice(0, 300));
-    const bad = results.filter((r) => r.size > 262144);
-    if (bad.length) console.log('OVER-SIZE SHOTS:', bad.map((b) => b.file).join(', '));
-    else console.log('All 4 screenshots within 256 KiB.');
+    mkdirSync(SHOTS_DIR, { recursive: true });
+    for (const [name, file] of shots) {
+      await cdp.navigate(`${base}/game/index.html?shot=${name}&seed=7`);
+      await waitFor(async () => {
+        try {
+          return await cdp.evaluate('window.__TURKEY && window.__TURKEY.shotFrozen === true');
+        } catch {
+          return false;
+        }
+      }, 30000, `shot ${name} freeze`);
+      await new Promise((r) => setTimeout(r, 250));
+      const buf = await cdp.screenshot();
+      const out = join(SHOTS_DIR, file);
+      writeFileSync(out, buf);
+      const log = await cdp.evaluate('window.__TURKEY.shotLog || ""');
+      const size = jpegSize(buf);
+      console.log(`${file}: ${buf.length} bytes, ${size ? `${size.width}x${size.height}` : 'size unknown'} — ${log}`);
+    }
   } finally {
-    cleanup();
+    cdp.close();
+    child.kill();
+    server.close();
   }
+  console.log('\nshots done — check sizes: every file must be 1280x800 and at most 256 KiB');
 }
 
-async function key(cdp, type, keyName, code, keyCode) {
-  await cdp.call('Input.dispatchKeyEvent', {
-    type, key: keyName, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode,
-  });
+const cmd = process.argv[2];
+if (cmd === 'test') {
+  runTests();
+} else if (cmd === 'shots') {
+  runShots();
+} else {
+  console.log('usage: node drive.mjs test | shots');
+  process.exit(2);
 }
-async function press(cdp, keyName, code, keyCode) {
-  await key(cdp, 'keyDown', keyName, code, keyCode);
-  await sleep(60);
-  await key(cdp, 'keyUp', keyName, code, keyCode);
-}
-
-async function runTest() {
-  const { cdp, cleanup } = await launch();
-  const checks = [];
-  const check = (name, ok, detail) => {
-    checks.push({ name, ok, detail });
-    console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
-  };
-  try {
-    await loadGame(cdp, 1280, 800, false);
-    let s = await cdp.evaluate('window.__turkey.state()');
-    check('title screen shows', s.screen === 'title', `screen=${s.screen}`);
-
-    await cdp.evaluate(`document.getElementById('btn-start').click()`);
-    await sleep(700);
-    s = await cdp.evaluate('window.__turkey.state()');
-    check('start button starts the run', s.screen === 'playing', `screen=${s.screen}`);
-
-    const lane0 = await cdp.evaluate('window.__turkey.game.player.lane');
-    await press(cdp, 'ArrowLeft', 'ArrowLeft', 37);
-    await sleep(300);
-    const lane1 = await cdp.evaluate('window.__turkey.game.player.lane');
-    check('ArrowLeft switches lane', lane1 === lane0 - 1, `lane ${lane0} -> ${lane1}`);
-    await press(cdp, 'ArrowRight', 'ArrowRight', 39);
-    await sleep(300);
-    const lane2 = await cdp.evaluate('window.__turkey.game.player.lane');
-    check('ArrowRight switches back', lane2 === lane0, `lane ${lane1} -> ${lane2}`);
-
-    await press(cdp, ' ', 'Space', 32);
-    await sleep(800);
-    const y = await cdp.evaluate('window.__turkey.game.player.y');
-    check('Space jumps', y > 0.2, `y=${y.toFixed(2)}`);
-    await sleep(900);
-    // Wait until the turkey has landed before rolling (roll needs both feet down).
-    await waitFor(async () => (await cdp.evaluate('window.__turkey.game.player.y')) === 0, 10000, 'landing');
-    await press(cdp, 'ArrowDown', 'ArrowDown', 40);
-    await sleep(150);
-    const rolling = await cdp.evaluate('window.__turkey.game.player.rolling');
-    check('ArrowDown rolls', rolling === true, `rolling=${rolling}`);
-    await sleep(800);
-
-    await sleep(4000);
-    s = await cdp.evaluate('window.__turkey.state()');
-    check('score and distance advance', s.score > 0 && s.distance > 0, `score=${s.score} dist=${s.distance}`);
-
-    // Force a hit in the turkey's own lane and watch a life go.
-    const lives0 = s.lives;
-    await cdp.evaluate(`(() => { const g = window.__turkey.game; g.player.invuln = 0; g.spawnObstacle('crate', g.player.lane, 3); })()`);
-    await sleep(3000);
-    s = await cdp.evaluate('window.__turkey.state()');
-    check('collision costs a life', s.lives === lives0 - 1, `lives ${lives0} -> ${s.lives}`);
-
-    // Hoverboard shield: pick up a tray, then take a hit and keep the life.
-    await cdp.evaluate(`(() => { const g = window.__turkey.game; g.spawnPowerup('tray', g.player.lane, 4); })()`);
-    await sleep(3500);
-    const board = await cdp.evaluate('window.__turkey.game.player.board !== null');
-    check('tray pickup activates the hoverboard', board === true, `board=${board}`);
-    const lives1 = await cdp.evaluate('window.__turkey.state()').then((st) => st.lives);
-    await cdp.evaluate(`(() => { const g = window.__turkey.game; g.player.invuln = 0; g.spawnObstacle('crate', g.player.lane, 3); })()`);
-    await sleep(3000);
-    s = await cdp.evaluate('window.__turkey.state()');
-    const boardGone = await cdp.evaluate('window.__turkey.game.player.board === null');
-    check('hoverboard absorbs a hit (life kept)', s.lives === lives1 && boardGone, `lives ${lives1} -> ${s.lives}, board gone=${boardGone}`);
-
-    // Pause button is a real control.
-    await cdp.evaluate(`document.getElementById('btn-pause').click()`);
-    await sleep(300);
-    s = await cdp.evaluate('window.__turkey.state()');
-    check('pause button pauses', s.screen === 'paused', `screen=${s.screen}`);
-    await cdp.evaluate(`document.getElementById('btn-resume').click()`);
-    await sleep(300);
-    s = await cdp.evaluate('window.__turkey.state()');
-    check('resume button resumes', s.screen === 'playing', `screen=${s.screen}`);
-
-    // Mute button toggles sound.
-    await cdp.evaluate(`document.getElementById('btn-mute').click()`);
-    await sleep(200);
-    const muted = await cdp.evaluate('window.__turkey.game.sound.muted');
-    check('mute button mutes', muted === true, `muted=${muted}`);
-    await cdp.evaluate(`document.getElementById('btn-mute').click()`);
-
-    // Drive to the caught end screen, then restart from its button.
-    await cdp.evaluate(`(() => { const g = window.__turkey.game; g.lives = 1; g.player.invuln = 0; g.spawnObstacle('crate', g.player.lane, 2); })()`);
-    await sleep(3000);
-    s = await cdp.evaluate('window.__turkey.state()');
-    const endOn = await cdp.evaluate(`document.getElementById('end-screen').classList.contains('on')`);
-    const endTitle = await cdp.evaluate(`document.getElementById('end-title').textContent`);
-    check('caught end screen shows', s.screen === 'over' && endOn && endTitle === 'CAUGHT!', `screen=${s.screen} title=${endTitle}`);
-    await cdp.evaluate(`document.getElementById('btn-restart').click()`);
-    await sleep(500);
-    s = await cdp.evaluate('window.__turkey.state()');
-    check('restart button restarts', s.screen === 'playing' && s.lives === 3, `screen=${s.screen} lives=${s.lives}`);
-
-    // Mobile layout: no horizontal overflow at phone width.
-    await loadGame(cdp, 540, 960, true);
-    const overflow = await cdp.evaluate('document.documentElement.scrollWidth - window.innerWidth');
-    check('phone layout has no horizontal overflow', overflow <= 0, `overflow=${overflow}px`);
-
-    const errors = cdp.errors();
-    check('no console/network errors', errors.length === 0, errors.length ? JSON.stringify(errors.slice(0, 3)).slice(0, 300) : 'clean');
-    const failed = checks.filter((c) => !c.ok).length;
-    console.log(failed === 0 ? 'ALL CHECKS PASSED' : `${failed} CHECK(S) FAILED`);
-    process.exitCode = failed === 0 ? 0 : 1;
-  } finally {
-    cleanup();
-  }
-}
-
-async function runDebug() {
-  const { cdp, cleanup } = await launch();
-  try {
-    await loadGame(cdp, 1280, 800, false);
-    await cdp.evaluate(`(() => {
-      const g = window.__turkey.game;
-      const orig = g._applyHit.bind(g);
-      window.__hits = [];
-      g._applyHit = function () {
-        window.__hits.push({
-          t: +g.time.toFixed(2), dist: Math.floor(g.distance), lane: g.player.lane,
-          y: +g.player.y.toFixed(2), rolling: g.player.rolling, board: !!g.player.board,
-          invuln: +g.player.invuln.toFixed(2),
-          near: g.obstacles.list.filter((o) => Math.abs(o.z) < 8).map((o) => o.kind + '@' + o.z.toFixed(1) + ' L' + o.lane + ' ' + o.mode),
-        });
-        return orig();
-      };
-      return 'hooked';
-    })()`);
-    const description = await cdp.evaluate(`window.__turkey.stageShot('cover')`);
-    const hits = await cdp.evaluate('window.__hits');
-    console.log(description);
-    console.log('hits:', JSON.stringify(hits, null, 1));
-    console.log('final:', JSON.stringify(await cdp.evaluate('window.__turkey.state()')));
-  } finally {
-    cleanup();
-  }
-}
-
-const mode = process.argv[2] || 'shots';
-if (mode === 'test') await runTest();
-else if (mode === 'debug') await runDebug();
-else await runShots();

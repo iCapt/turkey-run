@@ -1,14 +1,14 @@
-// Turkey Runner — a tiny static server for game/ (Node 22, standard library
-// only), a development convenience: `node serve.mjs` serves game/ on
-// http://localhost:8080. It sends the MIME types a browser game needs and
-// refuses any path outside game/.
-import { createReadStream, statSync } from 'node:fs';
+// serve.mjs — a tiny static server for playtesting: serves game/ on localhost.
+// No build step, no dependencies, Node standard library only.
+
 import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
-const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
-const port = Number(process.argv[2]) || 8080;
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), 'game');
+const PORT = Number(process.env.PORT || 8080);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -16,29 +16,37 @@ const MIME = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
+  '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.wav': 'audio/wav',
 };
 
-const server = createServer((request, response) => {
+const server = createServer(async (req, res) => {
   try {
-    const url = new URL(request.url, 'http://localhost');
-    let path = decodeURIComponent(url.pathname);
-    if (path === '/') path = '/index.html';
-    const file = resolve(join(root, normalize(path)));
-    if (!file.startsWith(root + sep) && file !== root) {
-      response.writeHead(403); response.end('forbidden'); return;
+    const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+    let rel = decodeURIComponent(url.pathname);
+    if (rel === '/') rel = '/index.html';
+    const filePath = resolve(join(ROOT, normalize(rel).replace(/^(\.\.[/\\])+/, '')));
+    if (!filePath.startsWith(ROOT + sep) && filePath !== ROOT) {
+      res.writeHead(403);
+      res.end('forbidden');
+      return;
     }
-    const stat = statSync(file);
-    if (!stat.isFile()) { response.writeHead(404); response.end('not found'); return; }
-    response.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
-    createReadStream(file).pipe(response);
-  } catch (error) {
-    response.writeHead(404); response.end('not found');
+    const data = await readFile(filePath);
+    // No caching: playtesting must always get the file just written.
+    res.writeHead(200, {
+      'content-type': MIME[extname(filePath).toLowerCase()] || 'text/plain; charset=utf-8',
+      'cache-control': 'no-cache, no-store, must-revalidate',
+    });
+    res.end(data);
+  } catch {
+    res.writeHead(404);
+    res.end('not found');
   }
 });
 
-server.listen(port, () => console.log(`serving game/ at http://localhost:${port}`));
+server.listen(PORT, () => {
+  console.log(`Turkey Runner at http://localhost:${PORT}/`);
+});

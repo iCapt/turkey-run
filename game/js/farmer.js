@@ -1,154 +1,230 @@
-// Turkey Runner — the farmer: overalls, straw hat, pitchfork, and a grudge.
-// One job: the chaser's body and the run cycle that sells how close he is.
-import * as THREE from 'three';
+// farmer.js — Farmer Otis: procedural model plus the four-state chase AI.
+// One job: how the farmer looks and how he hunts. The game feeds him the turkey's
+// lane and the difficulty; he reports his gap and his state, nothing else.
 
-function mat(color, rough = 0.9) {
-  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0.02 });
+import * as THREE from 'three';
+import { LANES, TUNING, FARMER_SHOUTS, clamp, lerp, pick } from './config.js';
+
+const SHIRT = 0xc0392b;
+const OVERALLS = 0x3a4a6b;
+const SKIN = 0xe8b88a;
+const STRAW = 0xd9b64a;
+const BOOT = 0x4a2e1a;
+
+function box(w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.9 }),
+  );
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  return m;
 }
 
+function ball(r, color, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1) {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 18, 14),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.85 }),
+  );
+  m.position.set(x, y, z);
+  m.scale.set(sx, sy, sz);
+  m.castShadow = true;
+  return m;
+}
+
+export const FARMER_STATES = ['CHASE', 'SEARCH', 'CORNER', 'LUNGE'];
+
 export class Farmer {
-  constructor() {
+  constructor(scene, rng) {
+    this.rng = rng;
     this.group = new THREE.Group();
-    this.legL = null; this.legR = null;
-    this.armL = null; this.armR = null;
-    this.pitchfork = null;
-    this.runPhase = 0;
-    this._build();
-  }
+    scene.add(this.group);
 
-  _build() {
-    const skin = mat(0xe8b98a);
-    const shirt = mat(0xc0392b);
-    const overalls = mat(0x2e5fa3);
-    const straw = mat(0xe8c84a, 0.95);
-    const dark = mat(0x4a2c14);
-    const steel = new THREE.MeshStandardMaterial({ color: 0xb8c0c8, roughness: 0.35, metalness: 0.7 });
+    // Legs in dark overalls, boots planted for a run.
+    this.legL = box(0.22, 0.85, 0.26, OVERALLS, -0.2, 0.45, 0);
+    this.legR = box(0.22, 0.85, 0.26, OVERALLS, 0.2, 0.45, 0);
+    this.group.add(this.legL, this.legR);
+    this.group.add(box(0.24, 0.14, 0.42, BOOT, -0.2, 0.07, 0.06));
+    this.group.add(box(0.24, 0.14, 0.42, BOOT, 0.2, 0.07, 0.06));
 
-    // Legs (overalls).
-    const legGeo = new THREE.CylinderGeometry(0.13, 0.15, 0.85, 10);
-    this.legL = new THREE.Group();
-    const ll = new THREE.Mesh(legGeo, overalls); ll.position.y = 0.42; ll.castShadow = true;
-    const bootL = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.14, 0.42), dark);
-    bootL.position.set(0, 0.07, 0.08);
-    this.legL.add(ll); this.legL.add(bootL);
-    this.legL.position.set(-0.22, 0, 0);
-    this.group.add(this.legL);
-    this.legR = new THREE.Group();
-    const lr = new THREE.Mesh(legGeo, overalls); lr.position.y = 0.42; lr.castShadow = true;
-    const bootR = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.14, 0.42), dark);
-    bootR.position.set(0, 0.07, 0.08);
-    this.legR.add(lr); this.legR.add(bootR);
-    this.legR.position.set(0.22, 0, 0);
-    this.group.add(this.legR);
+    // Torso: red shirt, broad shoulders, arms pumping.
+    this.torso = box(0.85, 0.8, 0.5, SHIRT, 0, 1.25, 0);
+    this.group.add(this.torso);
+    this.armL = box(0.2, 0.7, 0.22, SHIRT, -0.55, 1.25, 0);
+    this.armR = box(0.2, 0.7, 0.22, SHIRT, 0.55, 1.25, 0);
+    this.group.add(this.armL, this.armR);
 
-    // Torso: red shirt + overall bib.
-    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.85, 12), shirt);
-    torso.position.y = 1.28; torso.castShadow = true;
-    this.group.add(torso);
-    const bib = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.5, 0.12), overalls);
-    bib.position.set(0, 1.32, 0.42);
-    this.group.add(bib);
-    const strapGeo = new THREE.BoxGeometry(0.12, 0.55, 0.06);
-    const strapL = new THREE.Mesh(strapGeo, overalls); strapL.position.set(-0.22, 1.62, 0.42);
-    const strapR = new THREE.Mesh(strapGeo, overalls); strapR.position.set(0.22, 1.62, 0.42);
-    this.group.add(strapL); this.group.add(strapR);
+    // Head: skin, eyes, a nose, a moustache — a face, not a blank ball.
+    this.head = new THREE.Group();
+    this.head.position.set(0, 1.95, 0);
+    this.group.add(this.head);
+    this.head.add(ball(0.3, SKIN, 0, 0, 0));
+    this.head.add(ball(0.05, 0x1a1a1a, -0.11, 0.05, 0.26));
+    this.head.add(ball(0.05, 0x1a1a1a, 0.11, 0.05, 0.26));
+    this.head.add(ball(0.06, 0xc98a5a, 0, -0.03, 0.29, 1, 1.2, 1));
+    this.head.add(box(0.24, 0.06, 0.05, 0x5a3a1a, 0, -0.14, 0.28));
 
-    // Arms.
-    const armGeo = new THREE.CylinderGeometry(0.1, 0.11, 0.7, 10);
-    this.armL = new THREE.Group();
-    const al = new THREE.Mesh(armGeo, shirt); al.position.y = -0.32; al.castShadow = true;
-    this.armL.add(al);
-    this.armL.position.set(-0.55, 1.62, 0);
-    this.group.add(this.armL);
-    this.armR = new THREE.Group();
-    const ar = new THREE.Mesh(armGeo, shirt); ar.position.y = -0.32; ar.castShadow = true;
-    this.armR.add(ar);
-    this.armR.position.set(0.55, 1.62, 0);
-    this.group.add(this.armR);
-
-    // Head: skin, big nose, moustache, angry brows.
-    const head = new THREE.Group();
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.32, 16, 12), skin);
-    skull.castShadow = true;
-    head.add(skull);
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), skin);
-    nose.position.set(0, -0.04, 0.3);
-    head.add(nose);
-    const mo = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.07, 0.08), mat(0x3a2a1a));
-    mo.position.set(0, -0.14, 0.28);
-    head.add(mo);
-    const browGeo = new THREE.BoxGeometry(0.13, 0.05, 0.05);
-    const browL = new THREE.Mesh(browGeo, mat(0x3a2a1a)); browL.position.set(-0.13, 0.12, 0.27); browL.rotation.z = 0.35;
-    const browR = new THREE.Mesh(browGeo, mat(0x3a2a1a)); browR.position.set(0.13, 0.12, 0.27); browR.rotation.z = -0.35;
-    head.add(browL); head.add(browR);
-    // Straw hat: brim + dome.
-    const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.55, 0.05, 16), straw);
+    // Straw hat: a brim disc and a dented crown.
+    const brim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.48, 0.48, 0.05, 20),
+      new THREE.MeshStandardMaterial({ color: STRAW, roughness: 0.95 }),
+    );
     brim.position.y = 0.22;
-    head.add(brim);
-    const dome = new THREE.Mesh(new THREE.ConeGeometry(0.32, 0.3, 16), straw);
-    dome.position.y = 0.36;
-    head.add(dome);
-    head.position.set(0, 2.0, 0);
-    this.group.add(head);
+    brim.castShadow = true;
+    this.head.add(brim);
+    const crown = new THREE.Mesh(
+      new THREE.ConeGeometry(0.3, 0.34, 16),
+      new THREE.MeshStandardMaterial({ color: STRAW, roughness: 0.95 }),
+    );
+    crown.position.y = 0.4;
+    crown.castShadow = true;
+    this.head.add(crown);
 
-    // Pitchfork, gripped in the right hand and raised.
-    this.pitchfork = new THREE.Group();
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.7, 8), mat(0x8a6b3a));
-    shaft.position.y = 0.85;
-    this.pitchfork.add(shaft);
-    for (let i = -1; i <= 1; i += 1) {
-      const prong = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.4, 6), steel);
-      prong.position.set(i * 0.13, 1.85, 0);
-      this.pitchfork.add(prong);
+    // Pitchfork in his right hand: the tool of the trade.
+    this.fork = new THREE.Group();
+    this.fork.position.set(0.55, 1.25, 0.1);
+    this.group.add(this.fork);
+    const shaft = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.035, 0.035, 1.7, 8),
+      new THREE.MeshStandardMaterial({ color: 0x8a6a3a, roughness: 0.9 }),
+    );
+    shaft.castShadow = true;
+    this.fork.add(shaft);
+    for (let i = -1; i <= 1; i++) {
+      const prong = box(0.05, 0.34, 0.05, 0x9aa0a6, i * 0.11, 0.98, 0);
+      this.fork.add(prong);
     }
-    const cross = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.06), steel);
-    cross.position.y = 1.68;
-    this.pitchfork.add(cross);
-    this.pitchfork.position.set(0.62, 1.05, 0.25);
-    this.pitchfork.rotation.z = -0.25;
-    this.group.add(this.pitchfork);
+    this.fork.rotation.z = -0.25;
+
+    // AI state.
+    this.state = 'CHASE';
+    this.stateT = 0;
+    this.gap = 6; // metres behind the turkey
+    this.x = 0;
+    this.lane = 1;
+    this.chaseT = 0;
+    this.shout = '';
+    this.shoutT = 0;
+    this.lungeT = 0;
+    this.lungeLane = 1;
+    this.lungeHit = false;
+    this.runPhase = 0;
+    this.searchDir = 1;
+    this.group.position.set(0, 0, 6);
   }
 
-  // gapNorm: 0 = right on the turkey's tail, 1 = far behind and small.
-  // state: CHASE | SEARCH | CORNER | LUNGE — each reads differently.
-  update(dt, speedNorm, gapNorm, state = 'CHASE') {
-    const rate = state === 'SEARCH' ? 0.35 : state === 'LUNGE' ? 1.5 : 1;
-    this.runPhase += dt * (8 + speedNorm * 10) * rate;
-    const p = this.runPhase;
-    const s = Math.sin(p);
-    this.group.position.y = Math.abs(s) * 0.1;
-    if (state === 'SEARCH') {
-      // Slowing, sweeping his gaze lane to lane, pitchfork lowered.
-      this.group.rotation.y = Math.sin(p * 0.45) * 0.7;
-      this.group.rotation.x = 0.05;
-      this.legL.rotation.x = s * 0.35;
-      this.legR.rotation.x = -s * 0.35;
-      this.armL.rotation.x = -s * 0.3;
-      this.armR.rotation.x = 0.2;
-      this.pitchfork.rotation.x = 0.35 + s * 0.06;
-      this.pitchfork.rotation.z = -0.1;
-    } else if (state === 'LUNGE') {
-      // Telegraph: crouched, pitchfork thrust forward at the turkey.
-      this.group.rotation.y = 0;
-      this.group.rotation.x = 0.42;
-      this.group.position.y = -0.12;
-      this.legL.rotation.x = 0.9;
-      this.legR.rotation.x = -0.7;
-      this.armL.rotation.x = -1.1;
-      this.armR.rotation.x = -1.3;
-      this.pitchfork.rotation.x = -1.15;
-      this.pitchfork.rotation.z = -0.05;
-    } else {
-      // CHASE / CORNER: full run; CORNER leans in harder.
-      const lean = state === 'CORNER' ? 0.1 : 0;
-      this.group.rotation.y = 0;
-      this.group.rotation.x = 0.14 + (1 - gapNorm) * 0.12 + lean;
-      this.legL.rotation.x = s * 1.0;
-      this.legR.rotation.x = -s * 1.0;
-      this.armL.rotation.x = -s * 0.8;
-      this.armR.rotation.x = s * 0.5 - 0.5;
-      this.pitchfork.rotation.x = -0.3 + s * 0.12;
-      this.pitchfork.rotation.z = -0.25 - gapNorm * 0.15;
+  reset() {
+    this.state = 'CHASE';
+    this.stateT = 0;
+    this.gap = 6;
+    this.x = 0;
+    this.lane = 1;
+    this.chaseT = 0;
+    this.shout = '';
+    this.shoutT = 0;
+    this.lungeT = 0;
+    this.lungeHit = false;
+    this.runPhase = 0;
+    this.group.position.set(0, 0, 6);
+    this.group.rotation.set(0, 0, 0);
+  }
+
+  toState(next, events) {
+    if (this.state === next) return;
+    this.state = next;
+    this.stateT = 0;
+    if (events) events.push({ type: 'farmer', state: next });
+  }
+
+  forceSearch(events) {
+    this.toState('SEARCH', events);
+    this.stateT = 0;
+  }
+
+  update(dt, turkey, difficulty, events) {
+    this.stateT += dt;
+    const turkeyX = LANES[turkey.lane];
+
+    if (this.state === 'CHASE') {
+      this.chaseT += dt;
+      // He shadows the turkey's lane and closes the gap as the stages get harder.
+      this.x = lerp(this.x, turkeyX, Math.min(1, dt * 2.2));
+      this.gap -= difficulty.farmerRate * dt * (turkey.dashing ? 0.4 : 1);
+      if (this.gap < TUNING.farmerMinGap) this.gap = TUNING.farmerMinGap;
+      // Corner: after a long chase he cuts across to trap the bird.
+      if (this.chaseT > TUNING.cornerAfter && difficulty.stageIndex >= 1) {
+        this.chaseT = 0;
+        this.toState('CORNER', events);
+        if (events) events.push({ type: 'banner', key: 'corner' });
+      } else if (this.gap < TUNING.lungeRange && Math.abs(this.x - turkeyX) < 1.1) {
+        this.toState('LUNGE', events);
+        this.lungeT = TUNING.lungeTelegraph;
+        this.lungeLane = turkey.lane;
+        this.lungeHit = false;
+      }
+    } else if (this.state === 'SEARCH') {
+      // He lost the bird: sweeps lane to lane, head turning, then gives up and chases.
+      this.searchDir = this.stateT % 1.6 < 0.8 ? 1 : -1;
+      this.x = lerp(this.x, clamp(this.x + this.searchDir * dt * 1.6, LANES[0], LANES[2]), 0.5);
+      this.gap += dt * 0.8;
+      if (this.gap > TUNING.farmerMaxGap) this.gap = TUNING.farmerMaxGap;
+      if (this.stateT > TUNING.searchDuration) {
+        this.toState('CHASE', events);
+        if (events) events.push({ type: 'banner', key: 'spotted' });
+      }
+    } else if (this.state === 'CORNER') {
+      // He steps to the trapping lane and holds it, cutting the escape off.
+      const trapLane = turkey.lane === 1 ? 0 : 1;
+      this.x = lerp(this.x, LANES[trapLane], Math.min(1, dt * 4));
+      if (this.stateT > TUNING.cornerDuration) this.toState('CHASE', events);
+    } else if (this.state === 'LUNGE') {
+      // Telegraph, then a thrust at the turkey's lane. A dodge pushes him back.
+      if (this.lungeT > 0) {
+        this.lungeT -= dt;
+        this.group.rotation.x = -0.18;
+        if (this.lungeT <= 0) {
+          const dodged = turkey.lane !== this.lungeLane || turkey.airborne || turkey.rolling;
+          if (dodged) {
+            this.gap = Math.min(TUNING.farmerMaxGap, this.gap + TUNING.lungeDodgeReward);
+            if (events) events.push({ type: 'lungeDodged' });
+          } else if (!this.lungeHit) {
+            this.lungeHit = true;
+            if (events) events.push({ type: 'hit', cause: 'lunge' });
+          }
+          this.toState('CHASE', events);
+          this.group.rotation.x = 0;
+        }
+      }
     }
+
+    // Shouts: he only yells when he is close enough to be heard.
+    if (this.shoutT > 0) this.shoutT -= dt;
+    if (this.gap < 7 && this.shoutT <= 0 && this.state !== 'SEARCH') {
+      this.shout = pick(this.rng, FARMER_SHOUTS);
+      this.shoutT = 2.4;
+    } else if (this.gap >= 7) {
+      this.shout = '';
+    }
+
+    // Run cycle: legs and arms pump, hat stays put, fork bobs.
+    this.runPhase += dt * (this.state === 'LUNGE' ? 8 : 13);
+    const p = this.runPhase;
+    this.legL.rotation.x = Math.sin(p) * 0.8;
+    this.legR.rotation.x = -Math.sin(p) * 0.8;
+    this.armL.rotation.x = -Math.sin(p) * 0.7;
+    this.armR.rotation.x = Math.sin(p) * 0.7;
+    if (this.state === 'LUNGE') {
+      // Telegraph: the pitchfork goes up before the thrust, so the dodge reads.
+      this.fork.rotation.x = -0.9;
+    } else {
+      this.fork.rotation.x = Math.sin(p * 0.5) * 0.08;
+    }
+    if (this.state === 'SEARCH') {
+      this.head.rotation.y = Math.sin(this.stateT * 3) * 0.9;
+    } else {
+      this.head.rotation.y = lerp(this.head.rotation.y, 0, Math.min(1, dt * 5));
+    }
+
+    this.group.position.set(this.x, 0, this.gap);
   }
 }

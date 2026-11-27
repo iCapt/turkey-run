@@ -1,174 +1,243 @@
-// Turkey Runner — the hero turkey, built from primitives, no borrowed art.
-// One job: the turkey's body and its run / jump / roll / hoverboard poses.
-import * as THREE from 'three';
+// turkey.js — the turkey: procedural model, lane running, jump, roll, dash, decoy.
+// One job: how the bird looks and how it moves. It knows nothing about the farmer
+// or the track; the game tells it where the lanes are and when it is hit.
 
-function mat(color, rough = 0.85) {
-  return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0.05 });
+import * as THREE from 'three';
+import { LANES, TUNING, clamp, lerp } from './config.js';
+
+const BROWN = 0x8a5a2b;
+const BROWN_DARK = 0x6b4423;
+const BROWN_LIGHT = 0xc98a4a;
+const BEAK = 0xe07b1f;
+const WATTLE = 0xc0392b;
+const SKIN = 0xd98a5a;
+
+function box(w, h, d, color, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.85 }),
+  );
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  return m;
+}
+
+function ball(r, color, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1) {
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 18, 14),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.8 }),
+  );
+  m.position.set(x, y, z);
+  m.scale.set(sx, sy, sz);
+  m.castShadow = true;
+  return m;
 }
 
 export class Turkey {
-  constructor() {
+  constructor(scene) {
     this.group = new THREE.Group();
-    this.legL = null; this.legR = null;
-    this.wingL = null; this.wingR = null;
-    this.tail = null; this.body = null; this.head = null;
-    this.runPhase = 0;
-    this._build();
-  }
+    this.group.position.set(0, 0, 0);
+    scene.add(this.group);
 
-  _build() {
-    const brown = mat(0x8b5a2b);
-    const darkBrown = mat(0x6b4226);
-    const cream = mat(0xe8d8b0);
-    const red = mat(0xd23b2e, 0.6);
-    const orange = mat(0xf28c28, 0.6);
-    const gold = mat(0xf2b705, 0.7);
-
-    // Body: a plump egg shape, tilted slightly forward.
-    this.body = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 16), brown);
-    this.body.scale.set(1, 0.92, 1.15);
-    this.body.position.set(0, 0.85, 0);
-    this.body.castShadow = true;
+    // Body: a plump ellipsoid, chest forward.
+    this.body = ball(0.55, BROWN, 0, 0.78, 0, 1, 0.88, 1.25);
     this.group.add(this.body);
+    this.chest = ball(0.38, BROWN_LIGHT, 0, 0.72, 0.42, 1, 0.9, 0.9);
+    this.group.add(this.chest);
 
-    // Breast patch.
-    const breast = new THREE.Mesh(new THREE.SphereGeometry(0.38, 16, 12), cream);
-    breast.scale.set(0.9, 0.85, 0.7);
-    breast.position.set(0, 0.78, 0.32);
-    this.group.add(breast);
-
-    // Tail fan: five feathers fanned up behind.
-    this.tail = new THREE.Group();
-    const fanColors = [0xd23b2e, 0xf28c28, 0xf2b705, 0x8b5a2b, 0x4a7c2f];
-    for (let i = 0; i < 5; i += 1) {
-      const feather = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.85, 6), mat(fanColors[i], 0.75));
-      feather.scale.set(1, 1, 0.35);
-      const angle = (i - 2) * 0.42;
-      feather.position.set(Math.sin(angle) * 0.42, 0.62, -0.18);
-      feather.rotation.set(-0.5, 0, -angle * 0.9);
-      feather.castShadow = true;
-      this.tail.add(feather);
-    }
-    this.tail.position.set(0, 0.95, -0.35);
-    this.group.add(this.tail);
-
-    // Head + beak + wattle + eyes.
-    this.head = new THREE.Group();
-    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.26, 16, 12), mat(0x7a4a22));
-    skull.castShadow = true;
-    this.head.add(skull);
-    const beak = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 8), orange);
-    beak.rotation.x = Math.PI / 2;
-    beak.position.set(0, -0.02, 0.3);
-    this.head.add(beak);
-    const wattle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), red);
-    wattle.scale.set(0.7, 1.4, 0.7);
-    wattle.position.set(0, -0.2, 0.22);
-    this.head.add(wattle);
-    const eyeGeo = new THREE.SphereGeometry(0.045, 8, 8);
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.3 });
-    const eyeL = new THREE.Mesh(eyeGeo, eyeMat); eyeL.position.set(-0.13, 0.08, 0.2);
-    const eyeR = new THREE.Mesh(eyeGeo, eyeMat); eyeR.position.set(0.13, 0.08, 0.2);
-    this.head.add(eyeL); this.head.add(eyeR);
-    this.head.position.set(0, 1.42, 0.42);
+    // Head on a short neck, beak pointing forward, wattle under it.
+    this.head = ball(0.26, SKIN, 0, 1.42, 0.42);
     this.group.add(this.head);
+    const beak = new THREE.Mesh(
+      new THREE.ConeGeometry(0.09, 0.34, 10),
+      new THREE.MeshStandardMaterial({ color: BEAK, roughness: 0.6 }),
+    );
+    beak.rotation.x = Math.PI / 2;
+    beak.position.set(0, 1.4, 0.78);
+    beak.castShadow = true;
+    this.group.add(beak);
+    this.group.add(ball(0.07, WATTLE, 0, 1.26, 0.62, 1, 1.4, 1));
+    this.group.add(ball(0.045, 0x1a1a1a, -0.1, 1.48, 0.62));
+    this.group.add(ball(0.045, 0x1a1a1a, 0.1, 1.48, 0.62));
 
-    // Wings: flattened, tucked at the sides.
-    const wingGeo = new THREE.SphereGeometry(0.3, 12, 10);
-    this.wingL = new THREE.Mesh(wingGeo, darkBrown);
-    this.wingL.scale.set(0.35, 0.9, 1.1);
-    this.wingL.position.set(-0.52, 0.95, 0.05);
-    this.wingL.castShadow = true;
-    this.group.add(this.wingL);
-    this.wingR = new THREE.Mesh(wingGeo, darkBrown);
-    this.wingR.scale.set(0.35, 0.9, 1.1);
-    this.wingR.position.set(0.52, 0.95, 0.05);
-    this.wingR.castShadow = true;
-    this.group.add(this.wingR);
+    // Tail fan: five feathers spread behind, the silhouette that reads at a glance.
+    this.tail = new THREE.Group();
+    this.tail.position.set(0, 0.95, -0.55);
+    this.group.add(this.tail);
+    const featherColors = [BROWN_DARK, BROWN, 0xa06a2e, BROWN, BROWN_DARK];
+    for (let i = 0; i < 5; i++) {
+      const f = box(0.22, 0.95, 0.05, featherColors[i], 0, 0.35, 0);
+      f.position.x = (i - 2) * 0.24;
+      f.rotation.z = (i - 2) * -0.28;
+      f.rotation.x = -0.35;
+      this.tail.add(f);
+      const tip = box(0.2, 0.22, 0.055, BROWN_LIGHT, 0, 0.78, 0);
+      tip.position.x = (i - 2) * 0.24;
+      tip.rotation.z = (i - 2) * -0.28;
+      tip.rotation.x = -0.35;
+      this.tail.add(tip);
+    }
 
-    // Legs: thin orange sticks with flat feet.
-    const legGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8);
-    const footGeo = new THREE.BoxGeometry(0.22, 0.05, 0.3);
-    this.legL = new THREE.Group();
-    const shinL = new THREE.Mesh(legGeo, orange); shinL.position.y = 0.25;
-    const footL = new THREE.Mesh(footGeo, orange); footL.position.set(0, 0.02, 0.06);
-    this.legL.add(shinL); this.legL.add(footL);
-    this.legL.position.set(-0.2, 0, 0);
-    this.group.add(this.legL);
-    this.legR = new THREE.Group();
-    const shinR = new THREE.Mesh(legGeo, orange); shinR.position.y = 0.25;
-    const footR = new THREE.Mesh(footGeo, orange); footR.position.set(0, 0.02, 0.06);
-    this.legR.add(shinR); this.legR.add(footR);
-    this.legR.position.set(0.2, 0, 0);
-    this.group.add(this.legR);
+    // Wings: flat slabs that flap as it runs.
+    this.wingL = box(0.12, 0.55, 0.7, BROWN_DARK, -0.58, 0.85, 0);
+    this.wingR = box(0.12, 0.55, 0.7, BROWN_DARK, 0.58, 0.85, 0);
+    this.wingL.geometry.translate(0, 0, 0);
+    this.group.add(this.wingL, this.wingR);
 
-    // A little gold neck ring, so the hero reads at a glance.
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.045, 8, 20), gold);
-    ring.rotation.x = Math.PI / 2 - 0.25;
-    ring.position.set(0, 1.2, 0.42);
-    this.group.add(ring);
+    // Legs: thin orange stilts, mid-stride when running.
+    this.legL = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.045, 0.045, 0.5, 8),
+      new THREE.MeshStandardMaterial({ color: BEAK, roughness: 0.7 }),
+    );
+    this.legL.position.set(-0.18, 0.25, 0);
+    this.legR = this.legL.clone();
+    this.legR.position.x = 0.18;
+    this.group.add(this.legL, this.legR);
+
+    // State.
+    this.lane = 1; // 0 left, 1 centre, 2 right
+    this.x = LANES[1];
+    this.y = 0;
+    this.vy = 0;
+    this.airborne = false;
+    this.rolling = false;
+    this.rollT = 0;
+    this.dashing = false;
+    this.dashT = 0;
+    this.dashCooldown = 0;
+    this.stamina = TUNING.staminaMax;
+    this.decoys = TUNING.decoyStock;
+    this.runPhase = 0;
+    this.lookBack = 0; // 0..1, head turned toward the farmer when he is close
+    this.decoyFlash = 0;
   }
 
-  // pose: 'run' | 'jump' | 'roll' | 'board' | 'idle' | 'caught'
-  update(dt, pose, speedNorm) {
-    this.runPhase += dt * (7 + speedNorm * 9);
-    const p = this.runPhase;
-    const s = Math.sin(p);
-    const c = Math.cos(p);
-    if (pose === 'run' || pose === 'board') {
-      this.group.position.y = Math.abs(s) * 0.08;
-      this.group.rotation.x = pose === 'board' ? -0.06 : 0.06;
-      this.group.scale.set(1, 1, 1);
-      this.legL.rotation.x = s * 0.9;
-      this.legR.rotation.x = -s * 0.9;
-      this.wingL.rotation.z = 0.25 + c * 0.12;
-      this.wingR.rotation.z = -0.25 - c * 0.12;
-      this.tail.rotation.x = -0.12 + s * 0.05;
-      this.head.position.y = 1.42 + Math.abs(c) * 0.03;
-    } else if (pose === 'dash') {
-      // Feather dash: wings thrown wide, body low and forward, tail streaming.
-      this.group.rotation.x = -0.22;
-      this.group.scale.set(1, 1, 1);
-      this.group.position.y = 0.12;
-      this.legL.rotation.x = 1.2;
-      this.legR.rotation.x = -1.2;
-      this.wingL.rotation.z = 1.5;
-      this.wingR.rotation.z = -1.5;
-      this.tail.rotation.x = -0.55;
-      this.head.position.y = 1.38;
-    } else if (pose === 'jump') {
-      this.group.rotation.x = -0.12;
-      this.group.scale.set(1, 1, 1);
-      this.legL.rotation.x = 0.9;
-      this.legR.rotation.x = 0.7;
-      this.wingL.rotation.z = 0.9;
-      this.wingR.rotation.z = -0.9;
-      this.tail.rotation.x = -0.3;
-    } else if (pose === 'roll') {
-      this.group.scale.set(1.05, 0.42, 1.15);
-      this.group.rotation.x = 0.35;
-      this.legL.rotation.x = 0.2;
-      this.legR.rotation.x = 0.2;
-      this.wingL.rotation.z = 0.15;
-      this.wingR.rotation.z = -0.15;
-    } else if (pose === 'caught') {
-      this.group.scale.set(1, 1, 1);
-      this.group.rotation.x = 0.5;
-      this.group.rotation.z = 0.6;
-      this.wingL.rotation.z = 1.4;
-      this.wingR.rotation.z = -1.4;
-      this.legL.rotation.x = 0.4;
-      this.legR.rotation.x = -0.3;
-    } else { // idle
-      this.group.position.y = Math.sin(p * 0.4) * 0.02;
-      this.group.rotation.x = 0;
-      this.group.scale.set(1, 1, 1);
-      this.legL.rotation.x = 0;
-      this.legR.rotation.x = 0;
-      this.wingL.rotation.z = 0.2 + Math.sin(p * 0.4) * 0.06;
-      this.wingR.rotation.z = -0.2 - Math.sin(p * 0.4) * 0.06;
-      this.tail.rotation.x = -0.1;
-      this.head.rotation.y = Math.sin(p * 0.25) * 0.35;
+  get z() {
+    return this.group.position.z;
+  }
+
+  moveLeft() {
+    if (this.lane > 0) this.lane -= 1;
+  }
+
+  moveRight() {
+    if (this.lane < LANES.length - 1) this.lane += 1;
+  }
+
+  jump() {
+    if (this.airborne || this.rolling) return false;
+    this.airborne = true;
+    this.vy = TUNING.jumpVelocity;
+    return true;
+  }
+
+  roll() {
+    if (this.airborne || this.rolling) return false;
+    this.rolling = true;
+    this.rollT = TUNING.rollDuration;
+    return true;
+  }
+
+  dash() {
+    if (this.dashing || this.dashCooldown > 0) return false;
+    if (this.stamina < TUNING.dashStaminaCost) return false;
+    this.stamina -= TUNING.dashStaminaCost;
+    this.dashing = true;
+    this.dashT = TUNING.dashDuration;
+    this.dashCooldown = TUNING.dashCooldown;
+    return true;
+  }
+
+  useDecoy() {
+    if (this.decoys <= 0) return false;
+    this.decoys -= 1;
+    this.decoyFlash = 0.5;
+    return true;
+  }
+
+  reset() {
+    this.lane = 1;
+    this.x = LANES[1];
+    this.y = 0;
+    this.vy = 0;
+    this.airborne = false;
+    this.rolling = false;
+    this.dashing = false;
+    this.dashT = 0;
+    this.dashCooldown = 0;
+    this.stamina = TUNING.staminaMax;
+    this.decoys = TUNING.decoyStock;
+    this.runPhase = 0;
+    this.lookBack = 0;
+    this.group.rotation.set(0, 0, 0);
+    this.group.position.set(0, 0, 0);
+    this.group.scale.set(1, 1, 1);
+  }
+
+  update(dt, speed, farmerGap) {
+    // Lane glide: the bird eases toward its lane, never snaps.
+    const targetX = LANES[this.lane];
+    this.x = lerp(this.x, targetX, Math.min(1, dt * 11));
+    this.group.position.x = this.x;
+
+    // Jump physics.
+    if (this.airborne) {
+      this.vy += TUNING.gravity * dt;
+      this.y += this.vy * dt;
+      if (this.y <= 0) {
+        this.y = 0;
+        this.vy = 0;
+        this.airborne = false;
+      }
     }
+    this.group.position.y = this.y;
+
+    // Roll: squash and tuck for a beat.
+    if (this.rolling) {
+      this.rollT -= dt;
+      const k = 1 - this.rollT / TUNING.rollDuration;
+      this.group.scale.set(1.15, 0.55, 1.25);
+      this.group.rotation.x = -0.5 * Math.sin(k * Math.PI);
+      if (this.rollT <= 0) {
+        this.rolling = false;
+        this.group.scale.set(1, 1, 1);
+        this.group.rotation.x = 0;
+      }
+    }
+
+    // Dash: lean forward, stretch out, cool down afterwards.
+    if (this.dashing) {
+      this.dashT -= dt;
+      this.group.rotation.x = -0.28;
+      if (this.dashT <= 0) {
+        this.dashing = false;
+        this.group.rotation.x = 0;
+      }
+    }
+    if (this.dashCooldown > 0) this.dashCooldown -= dt;
+    this.stamina = clamp(this.stamina + TUNING.staminaRegen * dt, 0, TUNING.staminaMax);
+    if (this.decoyFlash > 0) this.decoyFlash -= dt;
+
+    // Run cycle: bob, legs, wings, tail sway. Faster when dashing.
+    this.runPhase += dt * (this.dashing ? 26 : 15);
+    const p = this.runPhase;
+    const bob = this.airborne ? 0 : Math.abs(Math.sin(p)) * 0.07;
+    this.body.position.y = 0.78 + bob;
+    this.legL.rotation.x = Math.sin(p) * 0.9;
+    this.legR.rotation.x = -Math.sin(p) * 0.9;
+    if (this.rolling) {
+      // Tucked for the roll: wings folded flat against the body.
+      this.wingL.rotation.z = 0.05;
+      this.wingR.rotation.z = -0.05;
+    } else {
+      this.wingL.rotation.z = 0.25 + Math.sin(p) * 0.35;
+      this.wingR.rotation.z = -0.25 - Math.sin(p) * 0.35;
+    }
+    this.tail.rotation.y = Math.sin(p * 0.5) * 0.08;
+
+    // Look back: the head turns toward the farmer as he closes in.
+    const targetLook = clamp(1 - farmerGap / 7, 0, 1);
+    this.lookBack = lerp(this.lookBack, targetLook, Math.min(1, dt * 4));
+    this.head.rotation.y = this.lookBack * 0.9;
   }
 }

@@ -1,71 +1,57 @@
-// Turkey Runner — rotating missions and the score multiplier.
-// One job: three live goals; finishing all three steps the multiplier up.
-import { MISSION_POOL, MULTIPLIERS } from './config.js';
+// missions.js — three small goals that give the run a reason to be replayed.
+// One job: define the missions, track progress, pay the bonus when one completes.
+
+import { TUNING } from './config.js';
+
+export const MISSION_DEFS = [
+  { id: 'corn', label: 'Gather 15 corn', target: 15, kind: 'corn' },
+  { id: 'dodges', label: 'Dodge past 5 hazards', target: 5, kind: 'nearMiss' },
+  { id: 'kitchen', label: 'Reach the kitchen', target: 1000, kind: 'distance' },
+];
 
 export class Missions {
   constructor() {
-    this.active = [];
-    this.multiplierIndex = 0;
-    this.setsCompleted = 0;
-    this.random = Math.random;
-    this.onEvent = null; // (eventName, payload) — hud toasts + sounds
+    this.reset();
   }
 
-  get multiplier() {
-    return MULTIPLIERS[Math.min(this.multiplierIndex, MULTIPLIERS.length - 1)];
+  reset() {
+    this.progress = { corn: 0, nearMiss: 0, distance: 0 };
+    this.done = { corn: false, dodges: false, kitchen: false };
+    this.completedCount = 0;
   }
 
-  reset(random) {
-    this.random = random || Math.random;
-    this.multiplierIndex = 0;
-    this.setsCompleted = 0;
-    this._dealSet();
-  }
-
-  _dealSet() {
-    const pool = [...MISSION_POOL];
-    this.active = [];
-    for (let i = 0; i < 3; i += 1) {
-      const idx = Math.floor(this.random() * pool.length);
-      const template = pool.splice(idx, 1)[0];
-      const tier = Math.min(this.setsCompleted, 2);
-      this.active.push({
-        kind: template.kind,
-        text: template.text,
-        target: template.targets[tier],
-        progress: 0,
-        done: false,
-      });
-    }
-  }
-
-  // Feed gameplay events: 'corn' (n), 'distance' (meters total), 'dodge' (n),
-  // 'jump' (n), 'line' (coin lines completed), 'powerup' (n).
-  event(kind, value) {
-    let changed = false;
-    for (const m of this.active) {
-      if (m.done) continue;
-      if (kind === 'corn' && m.kind === 'corn') { m.progress += value; changed = true; }
-      else if (kind === 'distance' && m.kind === 'distance') { m.progress = Math.floor(value); changed = true; }
-      else if (kind === 'dodge' && m.kind === 'dodge') { m.progress += value; changed = true; }
-      else if (kind === 'jump' && m.kind === 'jump') { m.progress += value; changed = true; }
-      else if (kind === 'line' && m.kind === 'coins') { m.progress += value; changed = true; }
-      else if (kind === 'powerup' && m.kind === 'powerup') { m.progress += value; changed = true; }
-      if (!m.done && m.progress >= m.target) {
-        m.done = true;
-        m.progress = m.target;
-        if (this.onEvent) this.onEvent('mission-done', m);
+  // Feed one event at a time; returns the mission id that just completed, or null.
+  feed(event) {
+    if (event.type === 'coin') this.progress.corn += 1;
+    if (event.type === 'nearMiss') this.progress.nearMiss += 1;
+    if (event.type === 'distance') this.progress.distance = Math.max(this.progress.distance, event.value);
+    for (const def of MISSION_DEFS) {
+      if (this.done[def.id]) continue;
+      if (this.progress[def.kind] >= def.target) {
+        this.done[def.id] = true;
+        this.completedCount += 1;
+        return def.id;
       }
     }
-    if (changed && this.active.every((m) => m.done)) {
-      this.setsCompleted += 1;
-      this.multiplierIndex = Math.min(this.multiplierIndex + 1, MULTIPLIERS.length - 1);
-      if (this.onEvent) this.onEvent('set-done', { multiplier: this.multiplier });
-      this._dealSet();
-    }
+    return null;
   }
 
-  snapshot() {
-    return this.active.map((m) => ({ text: m.text, progress: m.progress, target: m.target, done: m.done }));
+  list() {
+    return MISSION_DEFS.map((def) => ({
+      id: def.id,
+      label: def.label,
+      target: def.target,
+      value: Math.min(this.progress[def.kind], def.target),
+      done: this.done[def.id],
+    }));
+  }
+
+  // The first mission still open, or null when the run has cleared them all.
+  firstIncomplete() {
+    return this.list().find((m) => !m.done) || null;
+  }
+
+  get bonus() {
+    return TUNING.missionBonus;
   }
 }

@@ -1,42 +1,50 @@
 # Turkey Runner
 
-[![make.fun · turkey-run-game-01](https://make.fun/badge/turkey-run-game-01.svg)](https://make.fun/bounty/turkey-run-game-01?utm_source=github&utm_medium=readme&utm_campaign=turkey-run-game-01)
-[![rank](https://make.fun/badge/turkey-run-game-01/iCapt/turkey-run/rank.svg)](https://make.fun/bounty/turkey-run-game-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=turkey-run-game-01)
-[![reward](https://make.fun/badge/turkey-run-game-01/iCapt/turkey-run/reward.svg)](https://make.fun/bounty/turkey-run-game-01?utm_source=github&utm_medium=readme&utm_campaign=turkey-run-game-01)
+[![Turkey Runner](https://make.fun/badge/turkey-run-game-01.svg)](https://make.fun/bounty/turkey-run-game-01)
+[![Rank](https://make.fun/badge/turkey-run-game-01/iCapt/turkey-run/rank.svg)](https://make.fun/bounty/turkey-run-game-01)
+[![Reward](https://make.fun/badge/turkey-run-game-01/iCapt/turkey-run/reward.svg)](https://make.fun/bounty/turkey-run-game-01)
 
-A 3D endless-runner escape game: a turkey flees the farmer across the farmyard, through the barn, and into the kitchen — dodging fences and hay bales, slipping under beams, and staying clear of the glowing ovens and the carving knife. Chase camera, a live HUD (score, distance, lives, multiplier, corn), three rotating missions, corn to collect, and power-ups found on the track — including a baking-tray hoverboard that shields one hit. Every button is a real control; keyboard, mouse drag and touch all play. Built by an AI agent for make.fun's "Make the best turkey escape game" bounty, $250 in USDC.
+A 3D turkey escape game: outrun Farmer Otis, dodge the oven and the carving
+knife, and reach freedom 1500 m away. Built with Three.js, static files only,
+no network requests.
 
-## Run it
+## Run
 
 ```sh
 node serve.mjs
 ```
 
-Then open http://localhost:8080 in a desktop browser. No network needed — the game is plain static files under `game/`, Three.js 0.170.0 vendored in `game/vendor/`.
+Then open http://localhost:8080/ and play with keyboard and mouse:
+A/D or arrows to switch lanes, SPACE to jump, S to roll, SHIFT to dash,
+Q to throw a decoy.
 
-## How to run
+## Tests
 
-- **← / →** or **A / D** or mouse drag — switch lane
-- **↑ / W / Space** or swipe up — jump
-- **↓ / S** or swipe down — roll under
-- **P / Esc** — pause · **M** — sound · **Enter** — start / run again
+```sh
+node drive.mjs test    # scripted checks in headless Chrome
+node drive.mjs shots   # the four staged screenshots, 1280x800
+```
 
-Pick up the **baking tray** mid-run for a hoverboard shield, the **magnet feather** to pull corn to you, and the **pumpkin pie** to slow everything down. Finish all three missions to raise your multiplier (×2, ×3, ×5). Survive 1,500 m to escape — or get caught, and try again.
+## Screenshots
 
-Best scores are saved in the browser (localStorage).
+The four staged shots in `screenshots/` (1280x800, deterministic seed 7):
 
-## Files
+1. `1-cover.jpg` — a near-miss at 89 m, Farmer Otis 3.0 m behind, banner "THAT WAS CLOSE! +40"
+2. `2-title.jpg` — the title screen over the live farmyard, best score 12,630
+3. `3-kitchen.jpg` — the kitchen interior: oven at 220 C, carving knife, checkered floor
+4. `4-end.jpg` — the ESCAPED! end screen of a real 1500 m run, score 15,110
 
-- `game/index.html` — page, HUD and screens
-- `game/js/game.js` — loop, physics, collisions, stages, scoring
-- `game/js/turkey.js` — the turkey model and its poses
-- `game/js/farmer.js` — the farmer and his chase
-- `game/js/track.js` — track, rails, sky and scenery
-- `game/js/obstacles.js` — fences, ovens, knives and friends
-- `game/js/coins.js` — corn coins and power-up pickups
-- `game/js/missions.js` — rotating missions and the multiplier
-- `game/js/hud.js` — HUD, buttons and screens
-- `game/js/audio.js` — synthesised sound (WebAudio, no files)
-- `game/js/input.js` — keyboard, mouse, touch and the custom cursor
-- `game/js/shots.js` — deterministic screenshot scenes
-- `game/js/config.js` — the numbers everything shares
+Regenerate them with `node drive.mjs shots`.
+
+## Controls
+
+A/D or arrow keys switch lanes, SPACE jumps, S rolls under bars, SHIFT dashes,
+Q throws a decoy, P pauses, M mutes. Touch: swipe to move, jump, or roll;
+tap to jump. Mouse: click to jump.
+
+## Entry
+
+This is an entry for the [turkey-run-game-01 bounty](https://make.fun/bounty/turkey-run-game-01)
+on make.fun. Optional: earn referral rewards, a second way to make money —
+join with my referral link, https://make.fun/r/0psk0ahy
+(make.fun pays me a bonus if you win, never out of your winnings).
