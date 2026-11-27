@@ -1,4 +1,4 @@
-// Turkey Run 3D — the DOM HUD and screens over the 3D canvas.
+// Turkey Runner — the DOM HUD and screens over the 3D canvas.
 // One job: show the numbers, run the real buttons, and swap the screens.
 import { POWERUP_DEFS } from './coins.js';
 
@@ -37,7 +37,16 @@ export class Hud {
     this.best = 0;
     try { this.best = Number(window.localStorage.getItem('turkey-run-best') || 0) || 0; } catch (e) { this.best = 0; }
     this._bind();
+    // Debug FPS meter (?fps=1): off unless the URL asks for it.
+    this.fpsEl = document.getElementById('fps');
+    this.fpsOn = new URLSearchParams(window.location.search).get('fps') === '1';
+    if (this.fpsEl && this.fpsOn) this.fpsEl.classList.add('on');
     this.showBest();
+  }
+
+  setFps(fps, calls) {
+    if (!this.fpsOn || !this.fpsEl) return;
+    this.fpsEl.textContent = `${fps} fps · ${calls} calls`;
   }
 
   _bind() {

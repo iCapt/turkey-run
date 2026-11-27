@@ -1,4 +1,4 @@
-// Turkey Run 3D — the farmer: overalls, straw hat, pitchfork, and a grudge.
+// Turkey Runner — the farmer: overalls, straw hat, pitchfork, and a grudge.
 // One job: the chaser's body and the run cycle that sells how close he is.
 import * as THREE from 'three';
 

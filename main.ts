@@ -1,4 +1,4 @@
-// Turkey Run 3D — the entry program for the make.fun turkey-run-game-01 bounty.
+// Turkey Runner — the entry program for the make.fun turkey-run-game-01 bounty.
 //
 // The game is plain static files under game/ (a Three.js 3D endless runner:
 // a turkey escapes the farmer across the farmyard, the barn and the kitchen,

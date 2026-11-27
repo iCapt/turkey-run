@@ -1,4 +1,4 @@
-// Turkey Run 3D — keyboard, mouse drag, touch swipe and the custom cursor.
+// Turkey Runner — keyboard, mouse drag, touch swipe and the custom cursor.
 // One job: turn raw input into game intents (lane, jump, roll, pause, mute).
 // Buttons in the DOM stay real buttons; this module only reads the play field.
 export class Input {

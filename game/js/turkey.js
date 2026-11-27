@@ -1,4 +1,4 @@
-// Turkey Run 3D — the hero turkey, built from primitives, no borrowed art.
+// Turkey Runner — the hero turkey, built from primitives, no borrowed art.
 // One job: the turkey's body and its run / jump / roll / hoverboard poses.
 import * as THREE from 'three';
 

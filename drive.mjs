@@ -1,4 +1,4 @@
-// Turkey Run 3D — headless driver (Node 22 stdlib only): serves game/,
+// Turkey Runner — headless driver (Node 22 stdlib only): serves game/,
 // drives Chromium 1255 over CDP, and either takes the 4 screenshots
 // (`node drive.mjs shots`) or runs the scripted controls test
 // (`node drive.mjs test`). Nothing here ships in the entry.

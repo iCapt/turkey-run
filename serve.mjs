@@ -1,4 +1,4 @@
-// Turkey Run 3D — a tiny static server for game/ (Node 22, standard library
+// Turkey Runner — a tiny static server for game/ (Node 22, standard library
 // only), a development convenience: `node serve.mjs` serves game/ on
 // http://localhost:8080. It sends the MIME types a browser game needs and
 // refuses any path outside game/.

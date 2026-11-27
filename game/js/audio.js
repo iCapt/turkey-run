@@ -1,4 +1,4 @@
-// Turkey Run 3D — all sound is synthesized with WebAudio: no audio files.
+// Turkey Runner — all sound is synthesized with WebAudio: no audio files.
 // One job: gobbles, coin pings, thuds, fanfares and farm ambience.
 export class SoundBank {
   constructor() {

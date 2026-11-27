@@ -1,4 +1,4 @@
-// Turkey Run 3D — rotating missions and the score multiplier.
+// Turkey Runner — rotating missions and the score multiplier.
 // One job: three live goals; finishing all three steps the multiplier up.
 import { MISSION_POOL, MULTIPLIERS } from './config.js';
 

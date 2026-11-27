@@ -1,4 +1,4 @@
-// Turkey Run 3D — obstacles: what the turkey jumps, rolls under or dodges.
+// Turkey Runner — obstacles: what the turkey jumps, rolls under or dodges.
 // One job: build each obstacle's mesh, spawn fair rows, move them, test hits.
 import * as THREE from 'three';
 import { LANES, DESPAWN_BEHIND, HIT_Z } from './config.js';
@@ -22,96 +22,138 @@ const KINDS = {
   pin: { mode: 'roll', h: 1.6 },
 };
 
+
+// Shared obstacle materials + geometries (one per part shape): a spawned
+// obstacle reuses them, so a spawn allocates only Mesh/Group objects — no new
+// GPU buffers per spawn, no per-spawn upload, nothing to dispose on despawn.
+const MAT = {
+  wood: std(0x7a5a30),
+  woodDark: std(0x5d4126),
+  hay: std(0xe8c84a),
+  steel: std(0xb8c0c8, 0.35, 0.7),
+  red: std(0xa63a2a),
+  dark: std(0x3a3a3a, 0.5, 0.5),
+  green: std(0x4a7c2f),
+  cream: std(0xe8d8b0, 0.7),
+  ovenGlow: new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff5500, emissiveIntensity: 2.2 }),
+  lamp: new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc93c, emissiveIntensity: 1.4 }),
+};
+const GEO = {
+  fencePost: new THREE.BoxGeometry(0.16, 1.15, 0.16),
+  fenceRail: new THREE.BoxGeometry(2.2, 0.12, 0.08),
+  bale: new THREE.CylinderGeometry(0.85, 0.85, 1.3, 14),
+  baleBand: new THREE.TorusGeometry(0.86, 0.05, 8, 20),
+  barrel: new THREE.CylinderGeometry(0.55, 0.6, 1.0, 14),
+  barrelBand: new THREE.TorusGeometry(0.58, 0.04, 8, 20),
+  pot: new THREE.CylinderGeometry(0.62, 0.5, 0.95, 14),
+  lid: new THREE.CylinderGeometry(0.5, 0.5, 0.1, 14),
+  crate: new THREE.BoxGeometry(1.7, 1.7, 1.2),
+  crateEdge: new THREE.BoxGeometry(1.76, 0.14, 1.26),
+  pole: new THREE.CylinderGeometry(0.08, 0.08, 2.1, 8),
+  cross: new THREE.BoxGeometry(1.5, 0.12, 0.12),
+  shirt: new THREE.BoxGeometry(1.1, 0.8, 0.3),
+  hat: new THREE.ConeGeometry(0.4, 0.4, 10),
+  cartBed: new THREE.BoxGeometry(1.9, 0.7, 1.4),
+  hayTop: new THREE.SphereGeometry(0.8, 10, 8),
+  wheel: new THREE.CylinderGeometry(0.42, 0.42, 0.12, 12),
+  ovenBody: new THREE.BoxGeometry(2.0, 1.9, 1.3),
+  ovenMouth: new THREE.BoxGeometry(1.4, 0.9, 0.1),
+  chimney: new THREE.CylinderGeometry(0.18, 0.22, 0.9, 8),
+  knobs: new THREE.BoxGeometry(1.6, 0.18, 0.08),
+  knifeBlock: new THREE.BoxGeometry(1.8, 0.9, 1.2),
+  blade: new THREE.BoxGeometry(0.14, 1.7, 1.1),
+  handle: new THREE.BoxGeometry(0.16, 0.5, 0.22),
+  beamPost: new THREE.BoxGeometry(0.18, 1.7, 0.18),
+  beam: new THREE.BoxGeometry(2.4, 0.28, 0.3),
+  lamp: new THREE.SphereGeometry(0.16, 10, 8),
+  pinPost: new THREE.BoxGeometry(0.16, 1.6, 0.16),
+  pin: new THREE.CylinderGeometry(0.22, 0.22, 2.2, 12),
+};
+
 function buildMesh(kind) {
   const g = new THREE.Group();
-  const wood = std(0x7a5a30);
-  const woodDark = std(0x5d4126);
-  const hay = std(0xe8c84a);
-  const steel = std(0xb8c0c8, 0.35, 0.7);
-  const red = std(0xa63a2a);
-  const dark = std(0x3a3a3a, 0.5, 0.5);
+  const { wood, woodDark, hay, steel, red, dark } = MAT;
   if (kind === 'fence') {
     for (const dx of [-0.9, 0, 0.9]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.15, 0.16), wood);
+      const post = new THREE.Mesh(GEO.fencePost, wood);
       post.position.set(dx, 0.58, 0); post.castShadow = true; g.add(post);
     }
     for (const y of [0.4, 0.85]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.08), woodDark);
+      const rail = new THREE.Mesh(GEO.fenceRail, woodDark);
       rail.position.y = y; g.add(rail);
     }
   } else if (kind === 'hay') {
-    const bale = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 1.3, 14), hay);
+    const bale = new THREE.Mesh(GEO.bale, hay);
     bale.rotation.z = Math.PI / 2; bale.position.y = 0.85; bale.castShadow = true; g.add(bale);
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.05, 8, 20), woodDark);
+    const band = new THREE.Mesh(GEO.baleBand, woodDark);
     band.rotation.y = Math.PI / 2; band.position.y = 0.85; g.add(band);
   } else if (kind === 'barrel') {
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.6, 1.0, 14), wood);
+    const barrel = new THREE.Mesh(GEO.barrel, wood);
     barrel.position.y = 0.5; barrel.castShadow = true; g.add(barrel);
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.58, 0.04, 8, 20), dark);
+    const band = new THREE.Mesh(GEO.barrelBand, dark);
     band.rotation.x = Math.PI / 2; band.position.y = 0.75; g.add(band);
   } else if (kind === 'pot') {
-    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.5, 0.95, 14), dark);
+    const pot = new THREE.Mesh(GEO.pot, dark);
     pot.position.y = 0.48; pot.castShadow = true; g.add(pot);
-    const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.1, 14), steel);
+    const lid = new THREE.Mesh(GEO.lid, steel);
     lid.position.y = 1.0; g.add(lid);
   } else if (kind === 'crate') {
-    const crate = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.7, 1.2), wood);
+    const crate = new THREE.Mesh(GEO.crate, wood);
     crate.position.y = 0.85; crate.castShadow = true; g.add(crate);
-    const edge = new THREE.Mesh(new THREE.BoxGeometry(1.76, 0.14, 1.26), woodDark);
+    const edge = new THREE.Mesh(GEO.crateEdge, woodDark);
     edge.position.y = 1.55; g.add(edge);
   } else if (kind === 'scarecrow') {
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.1, 8), wood);
+    const pole = new THREE.Mesh(GEO.pole, wood);
     pole.position.y = 1.05; pole.castShadow = true; g.add(pole);
-    const cross = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.12, 0.12), wood);
+    const cross = new THREE.Mesh(GEO.cross, wood);
     cross.position.y = 1.6; g.add(cross);
-    const shirt = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.8, 0.3), std(0x4a7c2f));
+    const shirt = new THREE.Mesh(GEO.shirt, MAT.green);
     shirt.position.y = 1.35; g.add(shirt);
-    const hat = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.4, 10), std(0xe8c84a));
+    const hat = new THREE.Mesh(GEO.hat, hay);
     hat.position.y = 2.05; g.add(hat);
   } else if (kind === 'cart') {
-    const bed = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.7, 1.4), wood);
+    const bed = new THREE.Mesh(GEO.cartBed, wood);
     bed.position.y = 0.85; bed.castShadow = true; g.add(bed);
-    const hayTop = new THREE.Mesh(new THREE.SphereGeometry(0.8, 10, 8), hay);
+    const hayTop = new THREE.Mesh(GEO.hayTop, hay);
     hayTop.scale.set(1.1, 0.5, 0.8); hayTop.position.y = 1.3; g.add(hayTop);
-    const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.12, 12);
     for (const dx of [-0.7, 0.7]) {
-      const w = new THREE.Mesh(wheelGeo, woodDark);
+      const w = new THREE.Mesh(GEO.wheel, woodDark);
       w.rotation.z = Math.PI / 2; w.position.set(dx, 0.42, 0.72); g.add(w);
-      const w2 = new THREE.Mesh(wheelGeo, woodDark);
+      const w2 = new THREE.Mesh(GEO.wheel, woodDark);
       w2.rotation.z = Math.PI / 2; w2.position.set(dx, 0.42, -0.72); g.add(w2);
     }
   } else if (kind === 'oven') {
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.9, 1.3), dark);
+    const body = new THREE.Mesh(GEO.ovenBody, dark);
     body.position.y = 0.95; body.castShadow = true; g.add(body);
-    const glowMat = new THREE.MeshStandardMaterial({ color: 0xff6a00, emissive: 0xff5500, emissiveIntensity: 2.2 });
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.9, 0.1), glowMat);
+    const glowMat = MAT.ovenGlow;
+    const mouth = new THREE.Mesh(GEO.ovenMouth, glowMat);
     mouth.position.set(0, 0.75, 0.68); g.add(mouth);
-    const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.9, 8), dark);
+    const chimney = new THREE.Mesh(GEO.chimney, dark);
     chimney.position.set(0.6, 2.3, 0); g.add(chimney);
-    const knobs = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.18, 0.08), steel);
+    const knobs = new THREE.Mesh(GEO.knobs, steel);
     knobs.position.set(0, 1.75, 0.68); g.add(knobs);
   } else if (kind === 'knife') {
-    const block = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.9, 1.2), wood);
+    const block = new THREE.Mesh(GEO.knifeBlock, wood);
     block.position.y = 0.45; block.castShadow = true; g.add(block);
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, 1.1), steel);
+    const blade = new THREE.Mesh(GEO.blade, steel);
     blade.position.set(0.3, 1.7, 0); blade.rotation.z = -0.5; blade.castShadow = true; g.add(blade);
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.22), woodDark);
+    const handle = new THREE.Mesh(GEO.handle, woodDark);
     handle.position.set(0.95, 2.35, 0); handle.rotation.z = -0.5; g.add(handle);
   } else if (kind === 'beam') {
     for (const dx of [-1.0, 1.0]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 1.7, 0.18), wood);
+      const post = new THREE.Mesh(GEO.beamPost, wood);
       post.position.set(dx, 0.85, 0); post.castShadow = true; g.add(post);
     }
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.28, 0.3), woodDark);
+    const beam = new THREE.Mesh(GEO.beam, woodDark);
     beam.position.y = 1.55; beam.castShadow = true; g.add(beam);
-    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc93c, emissiveIntensity: 1.4 }));
+    const lamp = new THREE.Mesh(GEO.lamp, MAT.lamp);
     lamp.position.y = 1.3; g.add(lamp);
   } else if (kind === 'pin') {
     for (const dx of [-1.0, 1.0]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.6, 0.16), wood);
+      const post = new THREE.Mesh(GEO.pinPost, wood);
       post.position.set(dx, 0.8, 0); post.castShadow = true; g.add(post);
     }
-    const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 2.2, 12), std(0xe8d8b0, 0.7));
+    const pin = new THREE.Mesh(GEO.pin, MAT.cream);
     pin.rotation.z = Math.PI / 2; pin.position.y = 1.45; pin.castShadow = true; g.add(pin);
   }
   return g;

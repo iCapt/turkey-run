@@ -1,4 +1,4 @@
-// Turkey Run 3D — deterministic screenshot scenes behind ?shot=.
+// Turkey Runner — deterministic screenshot scenes behind ?shot=.
 // One job: play the real rules forward from a fresh world with a simple
 // autopilot, so each shot is what a short real game looks like, and the same
 // seed always gives the same frame. No scene is faked: every shot is a live

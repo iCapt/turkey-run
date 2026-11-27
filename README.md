@@ -1,4 +1,4 @@
-# Turkey Run 3D
+# Turkey Runner
 
 [![make.fun · turkey-run-game-01](https://make.fun/badge/turkey-run-game-01.svg)](https://make.fun/bounty/turkey-run-game-01?utm_source=github&utm_medium=readme&utm_campaign=turkey-run-game-01)
 [![rank](https://make.fun/badge/turkey-run-game-01/iCapt/turkey-run/rank.svg)](https://make.fun/bounty/turkey-run-game-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=turkey-run-game-01)

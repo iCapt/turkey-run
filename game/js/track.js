@@ -1,4 +1,4 @@
-// Turkey Run 3D — the world the turkey runs through: track, rails, sky and scenery.
+// Turkey Runner — the world the turkey runs through: track, rails, sky and scenery.
 // One job: the ground under the run and the stage dressing that scrolls past.
 import * as THREE from 'three';
 import { STAGES, LANES } from './config.js';
@@ -31,6 +31,34 @@ function groundTexture(baseColor, speckleColor, tile) {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+
+// Shared scenery materials + geometries (one per part shape): a spawned prop
+// reuses them, so spawning allocates only Mesh/Group objects — no new GPU
+// buffers per prop and nothing to dispose on despawn.
+const MAT = {
+  wood: new THREE.MeshStandardMaterial({ color: 0x7a5a30, roughness: 1 }),
+  leaf: new THREE.MeshStandardMaterial({ color: 0x4a7c2f, roughness: 1 }),
+  leaf2: new THREE.MeshStandardMaterial({ color: 0xd98e2b, roughness: 1 }),
+  hay: new THREE.MeshStandardMaterial({ color: 0xe8c84a, roughness: 1 }),
+  red: new THREE.MeshStandardMaterial({ color: 0xa63a2a, roughness: 0.9 }),
+  counter: new THREE.MeshStandardMaterial({ color: 0x8a6b4a, roughness: 0.8 }),
+  pot: new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.4, metalness: 0.6 }),
+  pumpkin: new THREE.MeshStandardMaterial({ color: 0xe8722a, roughness: 0.7 }),
+};
+const GEO = {
+  trunk: new THREE.CylinderGeometry(0.22, 0.3, 1.6, 8),
+  crown: new THREE.ConeGeometry(1.5, 3.2, 8),
+  bale: new THREE.CylinderGeometry(0.9, 0.9, 1.4, 12),
+  post: new THREE.BoxGeometry(0.16, 1.1, 0.16),
+  rail: new THREE.BoxGeometry(3.2, 0.12, 0.08),
+  wall: new THREE.BoxGeometry(3.4, 4.2, 0.3),
+  roof: new THREE.ConeGeometry(2.6, 1.4, 4),
+  counter: new THREE.BoxGeometry(2.6, 1.1, 1.2),
+  pot: new THREE.CylinderGeometry(0.35, 0.3, 0.5, 12),
+  pumpkin: new THREE.SphereGeometry(0.55, 12, 10),
+  stem: new THREE.CylinderGeometry(0.07, 0.09, 0.35, 6),
+};
 
 export class Track {
   constructor(scene) {
@@ -109,6 +137,7 @@ export class Track {
     this.sun.position.set(-6, 12, -4);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.bias = -0.0005; // plain PCF needs a small bias to avoid acne
     this.sun.shadow.camera.left = -12; this.sun.shadow.camera.right = 12;
     this.sun.shadow.camera.top = 12; this.sun.shadow.camera.bottom = -30;
     this.sun.shadow.camera.far = 60;
@@ -191,40 +220,36 @@ export class Track {
 
   _makeSceneryProp(kind) {
     const g = new THREE.Group();
-    const wood = new THREE.MeshStandardMaterial({ color: 0x7a5a30, roughness: 1 });
-    const leaf = new THREE.MeshStandardMaterial({ color: 0x4a7c2f, roughness: 1 });
-    const leaf2 = new THREE.MeshStandardMaterial({ color: 0xd98e2b, roughness: 1 });
-    const hay = new THREE.MeshStandardMaterial({ color: 0xe8c84a, roughness: 1 });
-    const red = new THREE.MeshStandardMaterial({ color: 0xa63a2a, roughness: 0.9 });
+    const { wood, leaf, leaf2, hay, red } = MAT;
     if (kind === 'tree') {
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1.6, 8), wood);
+      const trunk = new THREE.Mesh(GEO.trunk, wood);
       trunk.position.y = 0.8; trunk.castShadow = true; g.add(trunk);
-      const crown = new THREE.Mesh(new THREE.ConeGeometry(1.5, 3.2, 8), Math.random() < 0.5 ? leaf : leaf2);
+      const crown = new THREE.Mesh(GEO.crown, Math.random() < 0.5 ? leaf : leaf2);
       crown.position.y = 3.0; crown.castShadow = true; g.add(crown);
     } else if (kind === 'haystack') {
-      const bale = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 1.4, 12), hay);
+      const bale = new THREE.Mesh(GEO.bale, hay);
       bale.rotation.z = Math.PI / 2; bale.position.y = 0.9; bale.castShadow = true; g.add(bale);
     } else if (kind === 'fencepost') {
       for (let i = 0; i < 3; i += 1) {
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 1.1, 0.16), wood);
+        const post = new THREE.Mesh(GEO.post, wood);
         post.position.set(i * 1.4 - 1.4, 0.55, 0); post.castShadow = true; g.add(post);
       }
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.12, 0.08), wood);
+      const rail = new THREE.Mesh(GEO.rail, wood);
       rail.position.y = 0.85; g.add(rail);
     } else if (kind === 'barnwall') {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(3.4, 4.2, 0.3), red);
+      const wall = new THREE.Mesh(GEO.wall, red);
       wall.position.y = 2.1; wall.castShadow = true; g.add(wall);
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(2.6, 1.4, 4), wood);
+      const roof = new THREE.Mesh(GEO.roof, wood);
       roof.position.y = 4.9; roof.rotation.y = Math.PI / 4; g.add(roof);
     } else if (kind === 'counter') {
-      const counter = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.1, 1.2), new THREE.MeshStandardMaterial({ color: 0x8a6b4a, roughness: 0.8 }));
+      const counter = new THREE.Mesh(GEO.counter, MAT.counter);
       counter.position.y = 0.55; counter.castShadow = true; g.add(counter);
-      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.3, 0.5, 12), new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.4, metalness: 0.6 }));
+      const pot = new THREE.Mesh(GEO.pot, MAT.pot);
       pot.position.set(-0.5, 1.35, 0); g.add(pot);
     } else if (kind === 'pumpkin') {
-      const p = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), new THREE.MeshStandardMaterial({ color: 0xe8722a, roughness: 0.7 }));
+      const p = new THREE.Mesh(GEO.pumpkin, MAT.pumpkin);
       p.scale.y = 0.8; p.position.y = 0.45; p.castShadow = true; g.add(p);
-      const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.35, 6), leaf);
+      const stem = new THREE.Mesh(GEO.stem, leaf);
       stem.position.y = 0.95; g.add(stem);
     }
     return g;

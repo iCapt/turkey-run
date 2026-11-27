@@ -1,4 +1,4 @@
-// Turkey Run 3D — the game itself: loop, physics, collisions, stages, scoring.
+// Turkey Runner — the game itself: loop, physics, collisions, stages, scoring.
 // One job: own the run state and tie every module together.
 import * as THREE from 'three';
 import {
@@ -25,7 +25,7 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap; // plain PCF: cheaper than PCFSoft, same look at this scale
     this.app.prepend(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -102,6 +102,8 @@ export class Game {
     this._onResize();
     this._loop = this._loop.bind(this);
     this._last = performance.now();
+    this._fpsFrames = 0;
+    this._fpsWindowStart = performance.now();
     requestAnimationFrame(this._loop);
   }
 
@@ -420,6 +422,19 @@ export class Game {
     this._last = now;
     if (!this.frozen && (this.state === 'playing' || this.state === 'title')) this.step(dt);
     this.render();
+    this._sampleFps(now);
+  }
+
+  // Debug FPS meter (?fps=1): live fps + draw calls, sampled over 500 ms.
+  _sampleFps(now) {
+    if (!this.hud.fpsOn) return;
+    this._fpsFrames += 1;
+    if (now - this._fpsWindowStart >= 500) {
+      const fps = Math.round((this._fpsFrames * 1000) / (now - this._fpsWindowStart));
+      this._fpsFrames = 0;
+      this._fpsWindowStart = now;
+      this.hud.setFps(fps, this.renderer.info.render.calls);
+    }
   }
 
   freeze() { this.frozen = true; }

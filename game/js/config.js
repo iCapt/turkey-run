@@ -1,4 +1,4 @@
-// Turkey Run 3D — shared constants: lanes, stages, speeds, scoring.
+// Turkey Runner — shared constants: lanes, stages, speeds, scoring.
 // One job: the numbers every other module reads, so tuning lives in one place.
 export const LANES = [-2.4, 0, 2.4];
 export const LANE_COUNT = 3;
