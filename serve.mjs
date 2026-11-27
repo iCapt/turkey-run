@@ -1,0 +1,44 @@
+// Turkey Run 3D — a tiny static server for game/ (Node 22, standard library
+// only), a development convenience: `node serve.mjs` serves game/ on
+// http://localhost:8080. It sends the MIME types a browser game needs and
+// refuses any path outside game/.
+import { createReadStream, statSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
+const port = Number(process.argv[2]) || 8080;
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+};
+
+const server = createServer((request, response) => {
+  try {
+    const url = new URL(request.url, 'http://localhost');
+    let path = decodeURIComponent(url.pathname);
+    if (path === '/') path = '/index.html';
+    const file = resolve(join(root, normalize(path)));
+    if (!file.startsWith(root + sep) && file !== root) {
+      response.writeHead(403); response.end('forbidden'); return;
+    }
+    const stat = statSync(file);
+    if (!stat.isFile()) { response.writeHead(404); response.end('not found'); return; }
+    response.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' });
+    createReadStream(file).pipe(response);
+  } catch (error) {
+    response.writeHead(404); response.end('not found');
+  }
+});
+
+server.listen(port, () => console.log(`serving game/ at http://localhost:${port}`));

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Turkey Run 3D — Run, Turkey, Run!</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --cream: #fff3d6;
+    --gold: #f2b705;
+    --orange: #e8722a;
+    --deep-orange: #c85a17;
+    --brown: #6b3f1d;
+    --dark: #2b1a0e;
+    --green: #4a7c2f;
+    --red: #d23b2e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #2b1a0e; }
+  body { font-family: "Trebuchet MS", "Segoe UI", Verdana, sans-serif; color: var(--cream); }
+  #app { position: fixed; inset: 0; width: 100%; height: 100%; overflow: hidden; touch-action: none; cursor: none; }
+  #app canvas { display: block; width: 100%; height: 100%; }
+
+  /* ---------- custom cursor: a real pointer that follows the mouse ---------- */
+  #cursor {
+    position: fixed; left: 50%; top: 40%; width: 26px; height: 26px; z-index: 90;
+    pointer-events: none; transform: translate(-2px, -2px);
+    filter: drop-shadow(0 2px 2px rgba(0,0,0,.55));
+    display: none;
+  }
+  #cursor.on { display: block; }
+  #cursor svg { width: 26px; height: 26px; }
+  @media (hover: none) { #app { cursor: default; } }
+
+  /* ---------- HUD ---------- */
+  #hud { position: absolute; inset: 0; pointer-events: none; z-index: 20; display: none; }
+  #hud.on { display: block; }
+  .hud-btn {
+    pointer-events: auto; border: 3px solid var(--brown); border-radius: 14px;
+    background: linear-gradient(#ffd94d, var(--gold)); color: var(--dark);
+    font-size: 22px; font-weight: 900; line-height: 1; cursor: pointer;
+    width: 52px; height: 52px; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3px 0 var(--brown), 0 4px 8px rgba(0,0,0,.4);
+  }
+  .hud-btn:hover, .hud-btn.hot { background: linear-gradient(#ffe680, #ffc93c); transform: translateY(-1px); }
+  .hud-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--brown); }
+  #hud-topleft { position: absolute; top: 12px; left: 12px; display: flex; gap: 10px; }
+  #score-wrap { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); text-align: center; text-shadow: 0 2px 0 rgba(0,0,0,.45), 0 0 12px rgba(0,0,0,.35); }
+  #score-label { font-size: 12px; letter-spacing: 4px; font-weight: 900; color: #ffe9a8; }
+  #score { font-size: clamp(30px, 5vw, 44px); font-weight: 900; line-height: 1; color: #fff; }
+  #dist-line { font-size: 14px; font-weight: 700; color: #ffe9a8; margin-top: 2px; }
+  #mult { display: inline-block; margin-top: 4px; padding: 2px 12px; border-radius: 999px; background: var(--orange); border: 2px solid var(--cream); font-weight: 900; font-size: 15px; }
+  #mult.hot { background: var(--red); animation: pulse .5s infinite alternate; }
+  @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.12); } }
+  #hud-topright { position: absolute; top: 12px; right: 12px; text-align: right; text-shadow: 0 2px 0 rgba(0,0,0,.45); }
+  #coins { font-size: clamp(20px, 3vw, 28px); font-weight: 900; }
+  #lives { font-size: clamp(20px, 3vw, 28px); letter-spacing: 2px; color: #ff6b5e; margin-top: 2px; }
+  #lives .lost { color: rgba(255,255,255,.28); }
+  #powerup { position: absolute; top: 96px; right: 12px; width: 74px; text-align: center; display: none; }
+  #powerup.on { display: block; }
+  #powerup .pu-icon { font-size: 40px; line-height: 1; filter: drop-shadow(0 3px 3px rgba(0,0,0,.5)); }
+  #powerup .pu-name { font-size: 11px; font-weight: 900; letter-spacing: 1px; margin-top: 2px; text-shadow: 0 2px 0 rgba(0,0,0,.5); }
+  #powerup .pu-bar { height: 8px; margin-top: 4px; border-radius: 99px; background: rgba(0,0,0,.45); border: 1px solid var(--cream); overflow: hidden; }
+  #powerup .pu-fill { height: 100%; background: var(--gold); width: 100%; }
+  #missions { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 8px; width: min(96vw, 640px); justify-content: center; }
+  .mission { flex: 1; background: rgba(43,26,14,.72); border: 2px solid rgba(255,243,214,.65); border-radius: 12px; padding: 6px 8px; font-size: 12px; font-weight: 700; line-height: 1.25; }
+  .mission.done { border-color: var(--gold); background: rgba(74,124,47,.85); }
+  .mission .m-prog { display: block; font-size: 11px; color: #ffe9a8; }
+  #stage-banner {
+    position: absolute; left: 50%; top: 34%; transform: translate(-50%,-50%) scale(.9);
+    font-size: clamp(30px, 6vw, 54px); font-weight: 900; letter-spacing: 2px; text-align: center;
+    color: #fff; text-shadow: 0 3px 0 var(--brown), 0 6px 18px rgba(0,0,0,.6);
+    opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; white-space: nowrap;
+  }
+  #stage-banner.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  #stage-banner small { display: block; font-size: clamp(13px, 2vw, 18px); letter-spacing: 3px; color: #ffe9a8; }
+  #toast {
+    position: absolute; left: 50%; top: 22%; transform: translateX(-50%);
+    background: rgba(43,26,14,.85); border: 2px solid var(--gold); border-radius: 999px;
+    padding: 8px 20px; font-weight: 900; font-size: 16px; white-space: nowrap;
+    opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+
+  /* ---------- overlays ---------- */
+  .overlay { position: absolute; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 38%, rgba(43,26,14,.42), rgba(43,26,14,.88)); }
+  .overlay.on { display: flex; }
+  .panel {
+    width: min(92vw, 560px); max-height: 92vh; overflow-y: auto; text-align: center;
+    background: linear-gradient(#fff8e2, #ffe9b8); color: var(--dark);
+    border: 4px solid var(--brown); border-radius: 22px; padding: 22px 22px 26px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.6);
+  }
+  .panel h1 { font-size: clamp(34px, 7vw, 54px); line-height: .95; color: var(--deep-orange); text-shadow: 0 2px 0 #ffd94d; letter-spacing: 1px; }
+  .panel h2 { font-size: clamp(26px, 5vw, 38px); color: var(--deep-orange); }
+  .panel .tagline { font-size: 16px; font-weight: 700; color: var(--brown); margin: 8px 0 4px; }
+  .panel p { font-size: 14px; line-height: 1.45; color: #4a2c14; }
+  .controls-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; text-align: left; margin: 14px auto 4px; max-width: 440px; font-size: 13.5px; font-weight: 700; color: #4a2c14; }
+  .controls-grid b { color: var(--deep-orange); }
+  .big-btn {
+    pointer-events: auto; display: inline-block; margin-top: 16px; padding: 13px 34px;
+    font-family: inherit; font-size: 20px; font-weight: 900; letter-spacing: 1px; color: #fff;
+    background: linear-gradient(#f28a3c, var(--deep-orange)); border: 3px solid var(--brown);
+    border-radius: 999px; cursor: pointer; box-shadow: 0 4px 0 var(--brown), 0 6px 14px rgba(0,0,0,.35);
+  }
+  .big-btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  .big-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 var(--brown); }
+  .big-btn.green { background: linear-gradient(#6aa844, var(--green)); }
+  .big-btn.ghost { background: linear-gradient(#fff3d6, #ffe1a1); color: var(--dark); font-size: 16px; padding: 10px 22px; }
+  .btn-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  #best-line { margin-top: 12px; font-size: 13px; font-weight: 900; color: var(--brown); }
+  .stat-row { display: flex; justify-content: center; gap: 18px; flex-wrap: wrap; margin: 14px 0 2px; }
+  .stat { text-align: center; }
+  .stat .v { font-size: 26px; font-weight: 900; color: var(--deep-orange); }
+  .stat .k { font-size: 11px; font-weight: 900; letter-spacing: 2px; color: var(--brown); }
+  #end-story { font-style: italic; margin-top: 6px; }
+  .tiny { font-size: 11.5px; color: #8a6a4a; margin-top: 14px; line-height: 1.4; }
+
+  @media (max-width: 640px) {
+    .hud-btn { width: 44px; height: 44px; font-size: 19px; border-width: 2px; }
+    #score-label { font-size: 10px; }
+    #dist-line { font-size: 12px; }
+    #powerup { top: 84px; width: 60px; }
+    #powerup .pu-icon { font-size: 32px; }
+    .mission { font-size: 11px; }
+    .controls-grid { grid-template-columns: 1fr; }
+  }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="hud-topleft">
+      <button class="hud-btn" id="btn-pause" title="Pause (P)" aria-label="Pause game">&#10074;&#10074;</button>
+      <button class="hud-btn" id="btn-mute" title="Sound on/off (M)" aria-label="Toggle sound">&#128266;</button>
+    </div>
+    <div id="score-wrap">
+      <div id="score-label">SCORE</div>
+      <div id="score">0</div>
+      <div id="dist-line">0 m</div>
+      <div id="mult">&times;1</div>
+    </div>
+    <div id="hud-topright">
+      <div id="coins">&#127805; 0</div>
+      <div id="lives">&#10084;&#10084;&#10084;</div>
+    </div>
+    <div id="powerup">
+      <div class="pu-icon" id="pu-icon">&#127806;</div>
+      <div class="pu-name" id="pu-name">TRAY</div>
+      <div class="pu-bar"><div class="pu-fill" id="pu-fill"></div></div>
+    </div>
+    <div id="missions"></div>
+    <div id="stage-banner"></div>
+    <div id="toast"></div>
+  </div>
+
+  <div class="overlay on" id="title-screen">
+    <div class="panel">
+      <h1>TURKEY RUN 3D</h1>
+      <p class="tagline">Run, Turkey, Run! Escape the farmer before Thanksgiving dinner.</p>
+      <p>The farmer is right behind you with his pitchfork. Dodge the fences, leap the hay bales,
+      slip under the beams &mdash; and whatever you do, stay out of the kitchen&rsquo;s glowing ovens
+      and away from the carving knife.</p>
+      <div class="controls-grid">
+        <div><b>&larr; / &rarr;</b> or drag &mdash; switch lane</div>
+        <div><b>&uarr; / Space</b> or swipe up &mdash; jump</div>
+        <div><b>&darr;</b> or swipe down &mdash; roll under</div>
+        <div><b>P / Esc</b> &mdash; pause &nbsp; <b>M</b> &mdash; sound</div>
+      </div>
+      <p style="margin-top:8px">Grab <b>corn</b> for points, finish <b>missions</b> to raise your
+      multiplier, and catch the <b>baking tray</b> mid-run for a hoverboard shield. Three hearts,
+      one farmer, no second chances.</p>
+      <button class="big-btn green" id="btn-start">START RUN &#9654;</button>
+      <div id="best-line">Best score: 0</div>
+      <p class="tiny">A tiny original Thanksgiving chase game. Turkey, farmer, farm and kitchen are all
+      drawn from scratch &mdash; no borrowed characters, art or music.</p>
+    </div>
+  </div>
+
+  <div class="overlay" id="pause-screen">
+    <div class="panel">
+      <h2>PAUSED</h2>
+      <p class="tagline">The turkey is catching its breath. The farmer is not.</p>
+      <div class="btn-row">
+        <button class="big-btn green" id="btn-resume">RESUME &#9654;</button>
+        <button class="big-btn" id="btn-restart-pause">RESTART</button>
+        <button class="big-btn ghost" id="btn-mute-pause">SOUND: ON</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="end-screen">
+    <div class="panel">
+      <h2 id="end-title">CAUGHT!</h2>
+      <p class="tagline" id="end-story">The farmer got his Thanksgiving turkey.</p>
+      <div class="stat-row">
+        <div class="stat"><div class="v" id="end-score">0</div><div class="k">SCORE</div></div>
+        <div class="stat"><div class="v" id="end-dist">0 m</div><div class="k">DISTANCE</div></div>
+        <div class="stat"><div class="v" id="end-coins">0</div><div class="k">CORN</div></div>
+        <div class="stat"><div class="v" id="end-mult">&times;1</div><div class="k">MULTIPLIER</div></div>
+      </div>
+      <div class="btn-row">
+        <button class="big-btn green" id="btn-restart">RUN AGAIN &#9654;</button>
+      </div>
+      <div id="best-line-end">Best score: 0</div>
+    </div>
+  </div>
+
+  <div id="cursor"><svg viewBox="0 0 24 24"><path d="M4 2 L4 20 L9 15 L12 22 L15 20.5 L12 14 L19 14 Z" fill="#fff" stroke="#2b1a0e" stroke-width="1.6"/></svg></div>
+  <p id="status" role="status" aria-live="polite"></p>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+<script type="module" src="./js/game.js"></script>
+</body>
+</html>
